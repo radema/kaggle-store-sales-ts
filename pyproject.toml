@@ -9,6 +9,7 @@ dependencies = [
     "numpy",
     "pandas",
     "pytest",
+    "pyyaml>=6.0.3",
     "scikit-learn",
     "seaborn",
 ]
