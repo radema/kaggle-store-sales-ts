@@ -1,0 +1,111 @@
+from src.validation.metrics import squared_log_error
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+
+class EvaluationSuite:
+    """
+    Evaluation suite for analyzing forecasting performance across
+    different dimensions (store, family, time).
+    """
+
+    def __init__(self):
+        # We can add plot styles here
+        sns.set_theme(style="whitegrid")
+
+    def evaluate(self, y_true_df, y_pred):
+        """
+        Computes metrics and prepares evaluation artifacts.
+
+        Parameters:
+        -----------
+        y_true_df : pd.DataFrame
+            DataFrame containing actual 'sales' and metadata columns
+            ('date', 'store_nbr', 'family').
+        y_pred : array-like
+            Predicted sales values.
+
+        Returns:
+        --------
+        dict :
+            A dictionary containing:
+            - global_rmsle: float
+            - per_store: pd.Series
+            - per_family: pd.Series
+            - detailed: pd.DataFrame (actuals, preds, residuals, metadata)
+        """
+        results = y_true_df.copy()
+
+        # Clip intentionally handled by metrics function but good to have explicit prediction column
+        results["sales_pred"] = np.maximum(y_pred, 0)
+
+        # Use shared metric logic for the error calculation
+        results["sq_log_error"] = squared_log_error(
+            results["sales"], results["sales_pred"]
+        )
+        results["residual"] = results["sales_pred"] - results["sales"]
+
+        # Global metric
+        global_rmsle = np.sqrt(results["sq_log_error"].mean())
+
+        # Grouped metrics
+        per_store = results.groupby("store_nbr")["sq_log_error"].mean().apply(np.sqrt)
+        per_family = results.groupby("family")["sq_log_error"].mean().apply(np.sqrt)
+
+        report = {
+            "global_rmsle": global_rmsle,
+            "per_store": per_store,
+            "per_family": per_family,
+            "detailed": results,
+        }
+
+        return report
+
+    def plot_errors(self, report, title_suffix=""):
+        """
+        Generates analysis plots from the evaluation report.
+        """
+        detailed = report["detailed"]
+
+        fig, axes = plt.subplots(2, 2, figsize=(16, 12))
+        fig.suptitle(f"Forecasting Evaluation Performance {title_suffix}", fontsize=16)
+
+        # 1. Top 10 Families by RMSLE
+        top_families = report["per_family"].sort_values(ascending=False).head(10)
+        sns.barplot(
+            x=top_families.values,
+            y=top_families.index,
+            ax=axes[0, 0],
+            palette="viridis",
+        )
+        axes[0, 0].set_title("Top 10 High-Error Families (RMSLE)")
+
+        # 2. Top 10 Stores by RMSLE
+        top_stores = report["per_store"].sort_values(ascending=False).head(10)
+        sns.barplot(
+            x=top_stores.values,
+            y=top_stores.index.astype(str),
+            ax=axes[0, 1],
+            palette="magma",
+        )
+        axes[0, 1].set_title("Top 10 High-Error Stores (RMSLE)")
+
+        # 3. Error over time (Daily Mean RMSLE)
+        # Check if date is available
+        if "date" in detailed.columns:
+            error_over_time = (
+                detailed.groupby("date")["sq_log_error"].mean().apply(np.sqrt)
+            )
+            axes[1, 0].plot(
+                error_over_time.index, error_over_time.values, marker="o", linestyle="-"
+            )
+            axes[1, 0].set_title("RMSLE over Time")
+            axes[1, 0].tick_params(axis="x", rotation=45)
+
+        # 4. Residual Distribution
+        sns.histplot(detailed["residual"], kde=True, ax=axes[1, 1])
+        axes[1, 1].set_title("Residual Distribution (Pred - Actual)")
+
+        plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+        return fig
