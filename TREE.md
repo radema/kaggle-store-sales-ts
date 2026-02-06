@@ -6,18 +6,39 @@
 
 ```
 src/
+├── data/                    # Bolt #2: Data Pipeline Core
+│   ├── __init__.py
+│   └── loader.py            # DataLoader with schema/date handling
+├── features/                # Feature Engineering Logic
+│   ├── __init__.py
+│   ├── base.py              # BaseTimeSeriesTransformer (Leakage Checks)
+│   └── impute.py            # TimeSeriesImputer (ffill, bfill, interpolate)
+├── pipeline/                # Component Orchestration
+│   ├── __init__.py
+│   └── factory.py           # FeaturePipelineFactory (YAML -> Sklearn Pipeline)
 └── validation/              # Bolt #1: Validation Framework
-    ├── __init__.py          # Package initialization
-    ├── splitters.py         # TimeSeries Cross-Validation strategies (SlidingWindowTS)
-    ├── harness.py           # EvaluationSuite for reporting and plotting
-    └── metrics.py           # Official competition metric (RMSLE) definitions
+    ├── __init__.py
+    ├── splitters.py         # TimeSeries Cross-Validation
+    ├── harness.py           # EvaluationSuite
+    └── metrics.py           # RMSLE
 ```
 
 ## Module Responsibilities
 
+### `data`
+- **Goal**:Agostic data ingestion.
+- **Key Classes**: `DataLoader` (Unified access to raw CSVs).
+
+### `features`
+- **Goal**: Extensible feature transformations.
+- **Key Classes**: 
+    - `BaseTimeSeriesTransformer`: Scikit-learn compatible base with leakage hooks.
+    - `TimeSeriesImputer`: Configurable filling strategies.
+
+### `pipeline`
+- **Goal**: Decouple logic from configuration.
+- **Key Classes**: `FeaturePipelineFactory` (Dynamic instantiation from YAML).
+
 ### `validation`
 - **Goal**: Mimic the Kaggle evaluation process locally.
-- **Key Classes**:
-    - `SlidingWindowTS`: Generates train/validation indices for backtesting.
-    - `EvaluationSuite`: Takes predictions, calculates errors granularly (per store/family), and produces summary reports/plots.
-    - `rmsle`: Standalone competition metric function for quick checks.
+

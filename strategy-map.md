@@ -12,14 +12,15 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
 ## The Bolt Roadmap
 
 ### Phase 1: Foundation & Hybrid Baseline
-*   **Bolt #1: Validation Framework [SEQUENTIAL]**
+*   **Bolt #1: Validation Framework [COMPLETED]**
     *   Implement `TimeSeriesSplit` (custom/extended) and competition metric (RMSLE).
     *   Establish the ground truth evaluation harness.
 
-*   **Bolt #2: Component - Data Pipeline Core [SEQUENTIAL]**
+*   **Bolt #2: Component - Data Pipeline Core [COMPLETED]**
     *   Base Data Loader.
     *   Abstract Feature Transformer (BaseEstimator).
     *   YAML Feature Catalog Parser (Factory).
+
 
 *   **Bolt #3: Feature Engineering - Hybrid [SEQUENTIAL]**
     *   Concrete Transformers: Lags, Rolling Windows, Date Parts.
