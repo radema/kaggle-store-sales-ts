@@ -35,39 +35,44 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   Integrated `time_idx`, `OrdinalEncoding`, and `HybridRegressor`.
     *   Automated artifact generation (Metrics, Model Card).
 
-*   **Bolt #6: Reporting - Hybrid Analysis [SEQUENTIAL]**
+*   **Bolt #6: Reporting - Hybrid Analysis [COMPLETED]**
     *   Generate visualization report (Notebook/HTML).
     *   Plot Forecast vs Actuals, Residual Analysis, Error by Store/Family.
 
-*   **Bolt #7: Standardization & Refactoring [SEQUENTIAL]**
+*   **Bolt #7: Leveling & Grouped Validation [SEQUENTIAL]**
+    *   Implement `LevelTransformer`: Static Target Encoding & Lagged Moving Averages (Axiom: must end at $t-16$).
+    *   Fix K-Fold: Shift to `GroupedTimeSeriesSplit` (Store x Family groups) to ensure representative performance metrics.
+    *   Axiom: The "Overall Average" level for a segment must be computed using a rolling anchor ending at $t-16$ relative to forecast start.
+
+*   **Bolt #8: Standardization & Refactoring [SEQUENTIAL]**
     *   Implement `BaseRunner` Strategy pattern.
     *   Centralize Inference Context logic (Train+Test concatenation).
     *   Unify YAML parsing and Metric reporting.
     *   Integrate `ruff` for linting and pre-commits.
 
 ## Architectural Axioms (Knowledge Assets)
-1. **Feature Partitioning**: Trend models use temporal features (`time_idx`, `is_wage_day`); Residual models use non-linear features (Lags, Holiday IDs).
-2. **Direct Forecasting**: Lags must be $\ge H$ (forecast horizon) to maintain inference consistency without recursive loops.
-3. **Context Prepending**: Test set inference requires prepending at least $max(Lags)$ days of training data.
+1. **Feature Partitioning**: Trend models use temporal features (`time_idx`) and Levels; Residual models use non-linear features (Seasonal Lags, Holiday IDs).
+2. **Direct Forecasting**: Lags must be $\ge H$ (forecast horizon, usually 16 days) to maintain inference consistency without recursive loops.
+3. **Leveling Axiom**: Any volume-based "Level" or "Average" feature must be computed using a window ending at $t-16$ relative to the prediction point to prevent look-ahead bias.
 
 ### Phase 2: Graph Neural Networks (GNN)
-*   **Bolt #8: Data Prep - GNN [PARALLELABLE]**
+*   **Bolt #9: Data Prep - GNN [PARALLELABLE]**
     *   *Can start after Bolt #2, independent of Hybrid model.*
     *   Multivariate Tensor Fabrication: `(Batch, Time, Nodes, Features)`.
     *   Pre-computation of Correlation-based Adjacency Matrix (Learnable initialization).
 
-*   **Bolt #9: Model - GNN [SEQUENTIAL]**
+*   **Bolt #10: Model - GNN [SEQUENTIAL]**
     *   Architecture: Graph WaveNet or GCN-LSTM.
     *   Core Feature: "Learnable Adjacency" layer.
     *   Training loop with Validation integration.
 
-*   **Bolt #10: Reporting - GNN Analysis [SEQUENTIAL]**
+*   **Bolt #11: Reporting - GNN Analysis [SEQUENTIAL]**
     *   Visualize Learned Adjacency Matrix (Heatmap).
     *   Training/Validation Loss Curves.
     *   Forecast performance plots.
 
 ### Phase 3: Benchmark
-*   **Bolt #11: Comparative Analysis [SEQUENTIAL]**
+*   **Bolt #12: Comparative Analysis [SEQUENTIAL]**
     *   *Requires Bolt #6 and #10 outputs.*
     *   Load artifacts from Hybrid (#5) and GNN (#9).
     *   Comparative plots: Error distribution, "Better-than" analysis.
@@ -81,25 +86,27 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
 ```mermaid
 graph TD
     subgraph Foundation
-        B1[Bolt #1: Validation Framework] --> B2[Bolt #2: Data Pipeline Core]
+        B1[Bolt #1] --> B2[Bolt #2]
     end
 
     subgraph Hybrid Stream
-        B2 --> B3[Bolt #3: Feat. Eng. Hybrid]
-        B3 --> B4[Bolt #4: Model Hybrid Regressor]
-        B4 --> B5[Bolt #5: Exp. Hybrid Baseline]
-        B5 --> B6[Bolt #6: Report Hybrid]
+        B2 --> B3[Bolt #3]
+        B3 --> B4[Bolt #4]
+        B4 --> B5[Bolt #5]
+        B5 --> B6[Bolt #6]
+        B6 --> B7[Bolt #7: Leveling]
+        B7 --> B8[Bolt #8: Standardization]
     end
 
     subgraph GNN Stream
-        B2 --> B7[Bolt #7: Data Prep GNN]
-        B7 --> B8[Bolt #8: Model GNN]
-        B8 --> B9[Bolt #9: Report GNN]
+        B2 --> B9[Bolt #9]
+        B9 --> B10[Bolt #10]
+        B10 --> B11[Bolt #11]
     end
 
     subgraph Conclusion
-        B6 --> B10[Bolt #10: Comparative Analysis]
-        B9 --> B10
+        B8 --> B12[Bolt #12]
+        B11 --> B12
     end
 
     style B1 fill:#f9f,stroke:#333

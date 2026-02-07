@@ -121,10 +121,20 @@ class HybridRunner:
 
             y_pred = pipeline.predict(X_val)
 
+            # Extract components from the hybrid regressor
+            hybrid_model = pipeline.regressor_.named_steps["model"]
+            components = hybrid_model.last_components_
+            comp_df = pd.DataFrame(
+                {
+                    "trend_pred_log": components["trend"],
+                    "residual_pred_log": components["residual"],
+                }
+            )
+
             # Use harness to evaluate this fold
             # Harness expects a df with sales and metadata
             val_df = train_df.iloc[val_idx].copy()
-            report = harness.evaluate(val_df, y_pred)
+            report = harness.evaluate(val_df, y_pred, extra_cols=comp_df)
             oof_results.append(report["detailed"])
 
         # Combine all OOF results

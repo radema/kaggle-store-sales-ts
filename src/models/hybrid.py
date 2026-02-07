@@ -69,6 +69,7 @@ class HybridRegressor(BaseEstimator, RegressorMixin):
 
     def predict(self, X):
         components = self.predict_components(X)
+        self.last_components_ = components
         return components["total"]
 
     def predict_components(self, X):

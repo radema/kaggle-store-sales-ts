@@ -1,5 +1,7 @@
 from src.validation.metrics import squared_log_error
 import numpy as np
+import pandas as pd
+from typing import Optional
 import matplotlib.pyplot as plt
 import seaborn as sns
 
@@ -14,7 +16,7 @@ class EvaluationSuite:
         # We can add plot styles here
         sns.set_theme(style="whitegrid")
 
-    def evaluate(self, y_true_df, y_pred):
+    def evaluate(self, y_true_df, y_pred, extra_cols: Optional[pd.DataFrame] = None):
         """
         Computes metrics and prepares evaluation artifacts.
 
@@ -25,6 +27,8 @@ class EvaluationSuite:
             ('date', 'store_nbr', 'family').
         y_pred : array-like
             Predicted sales values.
+        extra_cols : pd.DataFrame, optional
+            Additional columns to append to the detailed results (e.g., model components).
 
         Returns:
         --------
@@ -45,6 +49,14 @@ class EvaluationSuite:
             results["sales"], results["sales_pred"]
         )
         results["residual"] = results["sales_pred"] - results["sales"]
+
+        # Append extra information if provided
+        if extra_cols is not None:
+            # Reindex to match results or use reset_index if indices are assumed aligned
+            extra_cols_copy = extra_cols.copy()
+            if len(extra_cols_copy) == len(results):
+                for col in extra_cols_copy.columns:
+                    results[col] = extra_cols_copy[col].values
 
         # Global metric
         global_rmsle = np.sqrt(results["sq_log_error"].mean())
