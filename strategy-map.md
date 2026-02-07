@@ -22,7 +22,7 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   YAML Feature Catalog Parser (Factory).
 
 
-*   **Bolt #3: Feature Engineering - Hybrid [SEQUENTIAL]**
+*   **Bolt #3: Feature Engineering - Hybrid [COMPLETED]**
     *   Concrete Transformers: Lags, Rolling Windows, Date Parts.
     *   Integration with YAML catalog.
 
@@ -61,6 +61,9 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   Load artifacts from Hybrid (#5) and GNN (#8).
     *   Comparative plots: Error distribution, "Better-than" analysis.
     *   Final conclusion on architecture suitability.
+
+### Future Improvements (Backlog)
+*   **Skill: `notebook-creator`**: Develop a specialized skill to programmatically generate standardized notebooks (EDA, Reports) using `nbformat`, ensuring consistent imports and settings.
 
 ## Execution Graph
 
