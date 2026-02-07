@@ -40,6 +40,10 @@
 │       ├── splitters.py     # TimeSeries Cross-Validation
 │       ├── harness.py       # EvaluationSuite
 │       └── metrics.py       # RMSLE
+├── notebooks/               # EDA and Reporting Notebooks
+│   ├── 01-eda-raw-data.ipynb
+│   └── reports/
+│       └── 02-residual-analysis.ipynb # Bolt #6 Analysis
 └── tests/                   # Test suite (pytest)
 ```
 
