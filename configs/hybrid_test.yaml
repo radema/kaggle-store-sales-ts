@@ -1,0 +1,40 @@
+# Test configuration for Hybrid Baseline
+run_name: "test_run"
+
+data:
+  train_path: "data/raw/train.csv"
+  test_path: "data/raw/test.csv"
+  stores_path: "data/raw/stores.csv"
+  oil_path: "data/raw/oil.csv"
+  holidays_path: "data/raw/holidays_events.csv"
+
+pipeline:
+  steps:
+    - name: "date_features"
+      class: "src.features.dates.DatePartTransformer"
+      params:
+        features: ["month", "day_of_week"]
+    - name: "lags"
+      class: "src.features.lags.LagTransformer"
+      params:
+        lags: [1, 7]
+        target_col: "sales"
+        group_cols: ["store_nbr", "family"]
+
+model:
+  trend_estimator:
+    class: "sklearn.linear_model.Ridge"
+    params:
+      alpha: 1.0
+  residual_estimator:
+    class: "lightgbm.LGBMRegressor"
+    params:
+      n_estimators: 10
+      learning_rate: 0.1
+      verbosity: -1
+
+validation:
+  train_days: 365
+  val_days: 15
+  n_folds: 2
+  target_transform: "log1p"
