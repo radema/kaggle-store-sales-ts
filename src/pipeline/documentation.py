@@ -15,7 +15,7 @@ class ModelCardGenerator:
         model_conf = config.get("model", {})
         val_conf = config.get("validation", {})
 
-        card = f"""# Model Card: {run_name}
+        card = rf"""# Model Card: {run_name}
 Generated on: {date_str}
 
 ## 1. Description
@@ -23,9 +23,9 @@ This model belongs to the Hybrid Baseline family, combining a Linear Trend estim
 
 ## 2. Architecture & Spaces
 *   **Type**: Hybrid (Additive) Regressor.
-*   **Transformation Space**: This model can be considered a function $f: \\mathbb{{R}}^n \\to \\mathbb{{R}}$. 
+*   **Transformation Space**: This model can be considered a function $f: \mathbb{{R}}^n \to \mathbb{{R}}$. 
     *   It maps an $n$-dimensional feature vector (tabular features + lags) to a single scalar representing the expected sales for a specific (store, family, date) tuple.
-    *   Unlike a seq2seq model that maps $\\mathbb{{R}}^{{T \\times n}} \\to \\mathbb{{R}}^{{H \\times 1}}$, this model handles the forecast horizon ($H=16$) through feature engineering (e.g., recursive forecasting or using lags that are available at the time of prediction).
+    *   Unlike a seq2seq model that maps $\mathbb{{R}}^{{T \times n}} \to \mathbb{{R}}^{{H \times 1}}$, this model handles the forecast horizon ($H=16$) through feature engineering (e.g., recursive forecasting or using lags that are available at the time of prediction).
 *   **Transformation**: Target is transformed using `{val_conf.get("target_transform", "None")}`.
 *   **Input Space**: {model_conf.get("feature_selector", "All features provided by pipeline")}
 *   **Output Space**: Predicted Sales (Units).
