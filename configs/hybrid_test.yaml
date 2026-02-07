@@ -13,13 +13,18 @@ pipeline:
     - name: "date_features"
       class: "src.features.dates.DatePartTransformer"
       params:
-        features: ["month", "day_of_week"]
+        parts: ["month", "dayofweek"]
     - name: "lags"
       class: "src.features.lags.LagTransformer"
       params:
-        lags: [1, 7]
-        target_col: "sales"
-        group_cols: ["store_nbr", "family"]
+        lags: [16, 21]
+        column: "sales"
+        groupby: ["store_nbr", "family"]
+    - name: "impute"
+      class: "src.features.impute.TimeSeriesImputer"
+      params:
+        method: "constant"
+        value: 0
 
 model:
   trend_estimator:
@@ -32,6 +37,7 @@ model:
       n_estimators: 10
       learning_rate: 0.1
       verbosity: -1
+  feature_selector: ["month", "dayofweek", "lag_16_sales", "lag_21_sales", "store_nbr"]
 
 validation:
   train_days: 365
