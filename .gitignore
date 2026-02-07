@@ -11,5 +11,6 @@ wheels/
 
 *.png
 
-.vscode/artifacts/
+.vscode/
+artifacts/
 data/raw/
