@@ -1,0 +1,63 @@
+data:
+  holidays_path: data/raw/holidays_events.csv
+  oil_path: data/raw/oil.csv
+  stores_path: data/raw/stores.csv
+  test_path: data/raw/test.csv
+  train_path: data/raw/train.csv
+model:
+  feature_selector:
+    - [time_idx, month, dayofweek, is_year_start, is_year_end, is_wage_day]
+    - [month, dayofweek, lag_16_sales, lag_21_sales, lag_28_sales, store_nbr, family_enc, is_holiday, is_wage_day]
+  residual_estimator:
+    class: lightgbm.LGBMRegressor
+    params:
+      learning_rate: 0.07
+      n_estimators: 200
+      max_depth: 7
+      num_leaves: 31
+      verbosity: -1
+  trend_estimator:
+    class: sklearn.linear_model.Ridge
+    params:
+      alpha: 0.7
+pipeline:
+  steps:
+  - class: src.features.dates.DatePartTransformer
+    name: date_features
+    params:
+      parts:
+      - month
+      - dayofweek
+      - is_year_start
+      - is_year_end
+      - is_wage_day
+      - time_idx
+  - class: src.features.holidays.HolidayTransformer
+    name: holidays
+    params:
+      holidays_path: data/raw/holidays_events.csv
+      stores_path: data/raw/stores.csv
+  - class: src.features.encoding.CategoricalEncoder
+    name: categorical_encoding
+    params:
+      columns: ["family", "holiday_type"]
+      suffix: "_enc"
+  - class: src.features.lags.LagTransformer
+    name: lags
+    params:
+      column: sales
+      groupby:
+      - store_nbr
+      - family
+      lags: [16, 21, 28]
+  - class: src.features.impute.TimeSeriesImputer
+    name: impute
+    params:
+      method: ['ffill', 'bfill']
+      value: 0
+run_name: test_run
+validation:
+  n_folds: 5
+  target_transform: log1p
+  train_days: 365
+  val_days: 15

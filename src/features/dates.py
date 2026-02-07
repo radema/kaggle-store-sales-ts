@@ -17,6 +17,17 @@ class DatePartTransformer(BaseTimeSeriesTransformer):
         super().__init__()
         self.parts = parts or ["year", "month", "day"]
         self.column = column
+        self.min_date_ = None
+
+    def fit(self, X, y=None):
+        """Identifies the minimum date to serve as a baseline for trend index."""
+        if self.column:
+            dates = pd.to_datetime(X[self.column])
+        else:
+            dates = pd.to_datetime(X.index)
+
+        self.min_date_ = dates.min()
+        return self
 
     def transform(self, X):
         X = X.copy()
@@ -73,5 +84,12 @@ class DatePartTransformer(BaseTimeSeriesTransformer):
             elif part == "is_wage_day":
                 # Ecuadorian Wage days: 15th and last day of month
                 X["is_wage_day"] = ((d.day == 15) | (d.is_month_end)).astype("bool")
+            elif part == "time_idx":
+                baseline = self.min_date_ if self.min_date_ is not None else dates.min()
+                delta = dates - baseline
+                if isinstance(delta, pd.Series):
+                    X["time_idx"] = delta.dt.days.astype("int32")
+                else:
+                    X["time_idx"] = delta.days.astype("int32")
 
         return X

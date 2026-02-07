@@ -10,25 +10,41 @@ class HolidayTransformer(BaseTimeSeriesTransformer):
     """
 
     def __init__(
-        self, holidays_df=None, stores_df=None, date_col="date", store_col="store_nbr"
+        self,
+        holidays_df=None,
+        stores_df=None,
+        holidays_path=None,
+        stores_path=None,
+        date_col="date",
+        store_col="store_nbr",
     ):
         super().__init__()
         self.holidays_df = holidays_df
         self.stores_df = stores_df
+        self.holidays_path = holidays_path
+        self.stores_path = stores_path
         self.date_col = date_col
         self.store_col = store_col
 
     def transform(self, X):
         X = X.copy()
 
-        # Preprocessing
-        # Filter out transferred holidays from the holidays table (they are workdays)
-        # Note: The 'Transfer' type event is the NEW date.
-        # So we keep type='Transfer' but remove rows where transferred=True
+        # Load data if paths are provided instead of DataFrames
+        holidays = self.holidays_df
+        if holidays is None and self.holidays_path:
+            holidays = pd.read_csv(self.holidays_path)
 
-        # If holidays_df is a path, load it? For now assume DataFrame.
-        holidays = self.holidays_df.copy()
-        stores = self.stores_df.copy()
+        stores = self.stores_df
+        if stores is None and self.stores_path:
+            stores = pd.read_csv(self.stores_path)
+
+        if holidays is None or stores is None:
+            # If no data provided, return X unchanged or with warning?
+            # For now, return X
+            return X
+
+        holidays = holidays.copy()
+        stores = stores.copy()
 
         # Ensure dates are datetime
         holidays["date"] = pd.to_datetime(holidays["date"])
@@ -60,19 +76,16 @@ class HolidayTransformer(BaseTimeSeriesTransformer):
         X["is_holiday"] = False
         X["holiday_type"] = "WorkDay"
 
-        # 1. Flag National
-        # Merge X with national holidays on date
-        # If match -> True
-
-        # Vectorized approach:
-        # Create a set of national dates
+        # deduplicate holidays to avoid row duplication in merge
         national_dates = set(national_holidays["date"].unique())
-        X.loc[X[self.date_col].isin(national_dates), "is_holiday"] = True
-        X.loc[X[self.date_col].isin(national_dates), "holiday_type"] = "National"
+        regional_holidays = regional_holidays.drop_duplicates(["date", "locale_name"])
+        local_holidays = local_holidays.drop_duplicates(["date", "locale_name"])
 
-        # 2. Flag Regional
-        # Match on Date AND State
-        # Rename columns for merge
+        # Update X
+        X["is_holiday"] = X[self.date_col].isin(national_dates)
+        X["holiday_type"] = np.where(X["is_holiday"], "National", "WorkDay")
+
+        # Flag Regional
         regional_holidays = regional_holidays.rename(
             columns={"locale_name": "state", "type": "type_reg"}
         )
@@ -81,13 +94,11 @@ class HolidayTransformer(BaseTimeSeriesTransformer):
             on=["date", "state"],
             how="left",
         )
-        # If type_reg is not null, it's a regional holiday
         is_reg = merged_reg["type_reg"].notna()
-        X.loc[is_reg, "is_holiday"] = True
-        X.loc[is_reg, "holiday_type"] = "Regional"
+        X.loc[is_reg.values, "is_holiday"] = True
+        X.loc[is_reg.values, "holiday_type"] = "Regional"
 
-        # 3. Flag Local
-        # Match on Date AND City
+        # Flag Local
         local_holidays = local_holidays.rename(
             columns={"locale_name": "city", "type": "type_loc"}
         )
@@ -97,7 +108,7 @@ class HolidayTransformer(BaseTimeSeriesTransformer):
             how="left",
         )
         is_loc = merged_loc["type_loc"].notna()
-        X.loc[is_loc, "is_holiday"] = True
-        X.loc[is_loc, "holiday_type"] = "Local"
+        X.loc[is_loc.values, "is_holiday"] = True
+        X.loc[is_loc.values, "holiday_type"] = "Local"
 
         return X

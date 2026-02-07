@@ -30,35 +30,46 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   `HybridRegressor` Class (sklearn-compatible).
     *   Logic: Linear Model (Trend) -> Residuals -> LightGBM (Seasonality/Interactions).
 
-*   **Bolt #5: Experiment - Hybrid Baseline [SEQUENTIAL]**
-    *   End-to-end execution.
-    *   Hyperparameter tuning using the Validation Framework.
-    *   Save predictions and artifacts.
+*   **Bolt #5: Experiment - Hybrid Baseline [COMPLETED]**
+    *   Unified runner with YAML config.
+    *   Integrated `time_idx`, `OrdinalEncoding`, and `HybridRegressor`.
+    *   Automated artifact generation (Metrics, Model Card).
 
 *   **Bolt #6: Reporting - Hybrid Analysis [SEQUENTIAL]**
     *   Generate visualization report (Notebook/HTML).
     *   Plot Forecast vs Actuals, Residual Analysis, Error by Store/Family.
 
+*   **Bolt #7: Standardization & Refactoring [SEQUENTIAL]**
+    *   Implement `BaseRunner` Strategy pattern.
+    *   Centralize Inference Context logic (Train+Test concatenation).
+    *   Unify YAML parsing and Metric reporting.
+    *   Integrate `ruff` for linting and pre-commits.
+
+## Architectural Axioms (Knowledge Assets)
+1. **Feature Partitioning**: Trend models use temporal features (`time_idx`, `is_wage_day`); Residual models use non-linear features (Lags, Holiday IDs).
+2. **Direct Forecasting**: Lags must be $\ge H$ (forecast horizon) to maintain inference consistency without recursive loops.
+3. **Context Prepending**: Test set inference requires prepending at least $max(Lags)$ days of training data.
+
 ### Phase 2: Graph Neural Networks (GNN)
-*   **Bolt #7: Data Prep - GNN [PARALLELABLE]**
+*   **Bolt #8: Data Prep - GNN [PARALLELABLE]**
     *   *Can start after Bolt #2, independent of Hybrid model.*
     *   Multivariate Tensor Fabrication: `(Batch, Time, Nodes, Features)`.
     *   Pre-computation of Correlation-based Adjacency Matrix (Learnable initialization).
 
-*   **Bolt #8: Model - GNN [SEQUENTIAL]**
+*   **Bolt #9: Model - GNN [SEQUENTIAL]**
     *   Architecture: Graph WaveNet or GCN-LSTM.
     *   Core Feature: "Learnable Adjacency" layer.
     *   Training loop with Validation integration.
 
-*   **Bolt #9: Reporting - GNN Analysis [SEQUENTIAL]**
+*   **Bolt #10: Reporting - GNN Analysis [SEQUENTIAL]**
     *   Visualize Learned Adjacency Matrix (Heatmap).
     *   Training/Validation Loss Curves.
     *   Forecast performance plots.
 
 ### Phase 3: Benchmark
-*   **Bolt #10: Comparative Analysis [SEQUENTIAL]**
-    *   *Requires Bolt #6 and #9 outputs.*
-    *   Load artifacts from Hybrid (#5) and GNN (#8).
+*   **Bolt #11: Comparative Analysis [SEQUENTIAL]**
+    *   *Requires Bolt #6 and #10 outputs.*
+    *   Load artifacts from Hybrid (#5) and GNN (#9).
     *   Comparative plots: Error distribution, "Better-than" analysis.
     *   Final conclusion on architecture suitability.
 

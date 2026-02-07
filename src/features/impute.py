@@ -18,15 +18,17 @@ class TimeSeriesImputer(BaseTimeSeriesTransformer):
         self.check_leakage(X)
         X = X.copy()
         cols = self.columns if self.columns else X.columns
+        methods = [self.method] if isinstance(self.method, str) else self.method
 
-        for col in cols:
-            if self.method == "ffill":
-                X[col] = X[col].ffill()
-            elif self.method == "bfill":
-                X[col] = X[col].bfill()
-            elif self.method == "constant":
-                X[col] = X[col].fillna(self.value)
-            elif self.method == "interpolate":
-                X[col] = X[col].interpolate()
+        for method in methods:
+            for col in cols:
+                if method == "ffill":
+                    X[col] = X[col].ffill()
+                elif method == "bfill":
+                    X[col] = X[col].bfill()
+                elif method == "constant":
+                    X[col] = X[col].fillna(self.value)
+                elif method == "interpolate":
+                    X[col] = X[col].interpolate()
 
         return X
