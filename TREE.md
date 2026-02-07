@@ -19,6 +19,9 @@ src/
 ├── pipeline/                # Component Orchestration
 │   ├── __init__.py
 │   └── factory.py           # FeaturePipelineFactory (YAML -> Sklearn Pipeline)
+├── models/                  # Bolt #4: Model Architectures
+│   ├── __init__.py
+│   └── hybrid.py            # HybridRegressor (Trend + Residuals)
 └── validation/              # Bolt #1: Validation Framework
     ├── __init__.py
     ├── splitters.py         # TimeSeries Cross-Validation

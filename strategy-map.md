@@ -26,7 +26,7 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   Concrete Transformers: Lags, Rolling Windows, Date Parts.
     *   Integration with YAML catalog.
 
-*   **Bolt #4: Model - Hybrid Regressor [SEQUENTIAL]**
+*   **Bolt #4: Model - Hybrid Regressor [COMPLETED]**
     *   `HybridRegressor` Class (sklearn-compatible).
     *   Logic: Linear Model (Trend) -> Residuals -> LightGBM (Seasonality/Interactions).
 
