@@ -12,7 +12,10 @@ src/
 ├── features/                # Feature Engineering Logic
 │   ├── __init__.py
 │   ├── base.py              # BaseTimeSeriesTransformer (Leakage Checks)
-│   └── impute.py            # TimeSeriesImputer (ffill, bfill, interpolate)
+│   ├── impute.py            # TimeSeriesImputer (ffill, bfill, interpolate)
+│   ├── dates.py             # DatePartTransformer (Year, Month, Day, Weekday)
+│   ├── lags.py              # LagTransformer (Shifted features)
+│   └── rolling.py           # RollingWindowTransformer (Mean, Std, Min, Max)
 ├── pipeline/                # Component Orchestration
 │   ├── __init__.py
 │   └── factory.py           # FeaturePipelineFactory (YAML -> Sklearn Pipeline)
@@ -21,6 +24,9 @@ src/
     ├── splitters.py         # TimeSeries Cross-Validation
     ├── harness.py           # EvaluationSuite
     └── metrics.py           # RMSLE
+    
+notebooks/                   # Exploration & Reports
+└── 01-eda-raw-data.ipynb    # Initial Raw Data Analysis
 ```
 
 ## Module Responsibilities
