@@ -39,12 +39,22 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   Generate visualization report (Notebook/HTML).
     *   Plot Forecast vs Actuals, Residual Analysis, Error by Store/Family.
 
-*   **Bolt #7: Leveling & Grouped Validation [SEQUENTIAL]**
+*   **Bolt #7: Leveling & Grouped Validation [COMPLETED]**
     *   Implement `LevelTransformer`: Static Target Encoding & Lagged Moving Averages (Axiom: must end at $t-16$).
     *   Fix K-Fold: Shift to `GroupedTimeSeriesSplit` (Store x Family groups) to ensure representative performance metrics.
-    *   Axiom: The "Overall Average" level for a segment must be computed using a rolling anchor ending at $t-16$ relative to forecast start.
+    *   Axiom: The "Overall Average" level for a segment must be computed using a rolling anchor ending at $t-16$ relative to the prediction point.
 
-*   **Bolt #8: Standardization & Refactoring [SEQUENTIAL]**
+*   **Bolt #8: Contextual Features & Trend Refinement [SEQUENTIAL]**
+    *   **Goal**: Integrate "World Context" and fix Trend/Level weighting issues.
+    *   **Context Features**:
+        *   **Oil**: Ingest `oil.csv` (fill missing, moving averages).
+        *   **Store Metadata**: Merge `stores.csv` features (cluster, type, city, state).
+        *   **Transactions**: Create `TransactionsLagTransformer`.
+    *   **Trend Model Repair**: Investigate why `time_idx` vs `levels` weighting is suboptimal. (Consider scaling or interaction terms).
+    *   **Analysis Upgrade**: Update notebook to drill down by Store Type, Cluster, and City to isolate skewed errors (e.g., Poultry/Meats).
+    *   **Axiom**: Transaction counts are lagged-only.
+
+*   **Bolt #9: Standardization & Refactoring [SEQUENTIAL]**
     *   Implement `BaseRunner` Strategy pattern.
     *   Centralize Inference Context logic (Train+Test concatenation).
     *   Unify YAML parsing and Metric reporting.
@@ -56,25 +66,25 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
 3. **Leveling Axiom**: Any volume-based "Level" or "Average" feature must be computed using a window ending at $t-16$ relative to the prediction point to prevent look-ahead bias.
 
 ### Phase 2: Graph Neural Networks (GNN)
-*   **Bolt #9: Data Prep - GNN [PARALLELABLE]**
+*   **Bolt #10: Data Prep - GNN [PARALLELABLE]**
     *   *Can start after Bolt #2, independent of Hybrid model.*
     *   Multivariate Tensor Fabrication: `(Batch, Time, Nodes, Features)`.
     *   Pre-computation of Correlation-based Adjacency Matrix (Learnable initialization).
 
-*   **Bolt #10: Model - GNN [SEQUENTIAL]**
+*   **Bolt #11: Model - GNN [SEQUENTIAL]**
     *   Architecture: Graph WaveNet or GCN-LSTM.
     *   Core Feature: "Learnable Adjacency" layer.
     *   Training loop with Validation integration.
 
-*   **Bolt #11: Reporting - GNN Analysis [SEQUENTIAL]**
+*   **Bolt #12: Reporting - GNN Analysis [SEQUENTIAL]**
     *   Visualize Learned Adjacency Matrix (Heatmap).
     *   Training/Validation Loss Curves.
     *   Forecast performance plots.
 
 ### Phase 3: Benchmark
-*   **Bolt #12: Comparative Analysis [SEQUENTIAL]**
-    *   *Requires Bolt #6 and #10 outputs.*
-    *   Load artifacts from Hybrid (#5) and GNN (#9).
+*   **Bolt #13: Comparative Analysis [SEQUENTIAL]**
+    *   *Requires Bolt #7 and #12 outputs.*
+    *   Load artifacts from Hybrid and GNN.
     *   Comparative plots: Error distribution, "Better-than" analysis.
     *   Final conclusion on architecture suitability.
 
@@ -95,18 +105,19 @@ graph TD
         B4 --> B5[Bolt #5]
         B5 --> B6[Bolt #6]
         B6 --> B7[Bolt #7: Leveling]
-        B7 --> B8[Bolt #8: Standardization]
+        B7 --> B8[Bolt #8: Context]
+        B8 --> B9[Bolt #9: Standardization]
     end
 
     subgraph GNN Stream
-        B2 --> B9[Bolt #9]
-        B9 --> B10[Bolt #10]
+        B2 --> B10[Bolt #10]
         B10 --> B11[Bolt #11]
+        B11 --> B12[Bolt #12]
     end
 
     subgraph Conclusion
-        B8 --> B12[Bolt #12]
-        B11 --> B12
+        B9 --> B13[Bolt #13]
+        B12 --> B13
     end
 
     style B1 fill:#f9f,stroke:#333
