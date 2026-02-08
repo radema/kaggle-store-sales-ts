@@ -45,32 +45,33 @@ class LevelTransformer(BaseTimeSeriesTransformer):
 
         if self.groupby:
             grouped = X.groupby(self.groupby)[self.target_col]
-            if self.window:
-                res = grouped.transform(
-                    lambda x: (
-                        x.shift(16).rolling(window=self.window, min_periods=1).mean()
-                    )
-                )
-            else:
-                res = grouped.transform(
-                    lambda x: x.shift(16).expanding(min_periods=1).mean()
-                )
+
+            # Helper to compute mean in the requested space
+            def compute_level(s):
+                target = s.shift(16)
+                if self.log_transform:
+                    import numpy as np
+
+                    target = np.log1p(target)
+
+                if self.window:
+                    return target.rolling(window=self.window, min_periods=1).mean()
+                return target.expanding(min_periods=1).mean()
+
+            res = grouped.transform(compute_level)
         else:
+            target = X[self.target_col].shift(16)
+            if self.log_transform:
+                import numpy as np
+
+                target = np.log1p(target)
+
             if self.window:
-                res = (
-                    X[self.target_col]
-                    .shift(16)
-                    .rolling(window=self.window, min_periods=1)
-                    .mean()
-                )
+                res = target.rolling(window=self.window, min_periods=1).mean()
             else:
-                res = X[self.target_col].shift(16).expanding(min_periods=1).mean()
+                res = target.expanding(min_periods=1).mean()
 
         X[column_name] = res.fillna(self.fallback)
 
-        if self.log_transform:
-            import numpy as np
-
-            X[column_name] = np.log1p(X[column_name])
-
+        # No extra transformation needed here, as it's now done before the mean
         return X

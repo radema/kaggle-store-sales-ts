@@ -57,7 +57,6 @@ class HybridRunner:
         # 2. Hybrid Model
         model_conf = self.config.get("model", {})
 
-        # Helper to instantiate estimators from config
         def _get_estimator(conf):
             if not conf:
                 return None
@@ -74,6 +73,7 @@ class HybridRunner:
             trend_estimator=trend_est,
             residual_estimator=resid_est,
             feature_selector=model_conf.get("feature_selector"),
+            compose_mode=model_conf.get("compose_mode", "additive"),
         )
 
         # 3. Full Sklearn Pipeline (Flattened)
@@ -87,7 +87,6 @@ class HybridRunner:
             return TransformedTargetRegressor(
                 regressor=full_pipe, func=np.log1p, inverse_func=np.expm1
             )
-
         return TransformedTargetRegressor(regressor=full_pipe)
 
     def run_cv(self):
@@ -118,20 +117,22 @@ class HybridRunner:
             pipeline = self._build_pipeline()
             pipeline.fit(X_train, y_train)
 
-            y_pred = pipeline.predict(X_val)
+            # Atomic Prediction with History
+            X_val_context = pd.concat([X_train, X_val], axis=0)
+            y_pred_full = pipeline.predict(X_val_context)
+            y_pred = y_pred_full[-len(X_val) :]
 
-            # Extract components from the hybrid regressor
+            # Extract components (carefully slicing)
             hybrid_model = pipeline.regressor_.named_steps["model"]
             components = hybrid_model.last_components_
             comp_df = pd.DataFrame(
                 {
-                    "trend_pred_log": components["trend"],
-                    "residual_pred_log": components["residual"],
+                    "trend_pred_log": components["trend"][-len(X_val) :],
+                    "residual_pred_log": components["residual"][-len(X_val) :],
                 }
             )
 
-            # Use harness to evaluate this fold
-            # Harness expects a df with sales and metadata
+            # Use harness
             val_df = train_df.iloc[val_idx].copy()
             report = harness.evaluate(val_df, y_pred, extra_cols=comp_df)
             oof_results.append(report["detailed"])
@@ -173,25 +174,19 @@ class HybridRunner:
         test_df = self.data["test"].copy()
 
         # 1. Prepare Inference context (Concatenate Train + Test for Lags)
-        test_df["sales"] = 0  # Dummy value for pipeline consistency
+        test_df["sales"] = 0  # Dummy value
         X_inf = pd.concat([train_df, test_df], axis=0, sort=False)
         X_inf = X_inf.sort_values(["date", "store_nbr", "family"])
 
-        # 2. Predict on the whole combined set
+        # 2. Predict on the whole combined set (Atomic Pipeline)
         preds_all = self.full_pipeline.predict(X_inf)
-
-        # 3. Attach results to X_inf to easy extraction
         X_inf["sales_pred"] = preds_all
 
-        # 4. Extract only the test rows (where id exists and belongs to test)
-        # Kaggle test set has unique IDs that don't overlap with train
+        # 3. Extract test set
         test_ids = self.data["test"]["id"].values
         submission = X_inf[X_inf["id"].isin(test_ids)].copy()
-
-        # Ensure order matches test_df if needed, though submission usually doesn't care
         submission = submission.sort_values("id")
 
-        # Cleanup
         submission = submission[["id", "sales_pred"]].rename(
             columns={"sales_pred": "sales"}
         )
@@ -241,13 +236,13 @@ class HybridRunner:
 
         # 5. Model Card
         doc_gen = ModelCardGenerator()
-        # Simple pipeline summary
-        pipe_summary = (
+        # Simple summary
+        model_summary = (
             str(self.full_pipeline.regressor_)
             if hasattr(self, "full_pipeline")
-            else "Not trained on full data"
+            else "Not trained"
         )
-        card = doc_gen.generate(self.config, pipe_summary)
+        card = doc_gen.generate(self.config, model_summary)
         with open(path / "model_card.md", "w") as f:
             f.write(card)
 

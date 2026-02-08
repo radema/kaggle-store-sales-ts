@@ -8,7 +8,7 @@
 ## 2. Technical Constraints
 - **Lag Gaps**: Lag features create NaNs at the series start. Chained imputation (e.g., `ffill` -> `constant`) is mandatory for linear estimators (Ridge/SVR) that do not handle NaNs.
 - **Categorical Handling**: While GBTs (LightGBM) handle categoricals, a standardized `OrdinalEncoder` in the pipeline ensures full traceability and serialization of the category-to-integer mapping.
-- **Inference Context**: At test time, a window of training data (size $\ge \text{max\_lag}$) must be prepended to the test set to allow the feature pipeline to compute lagged values.
+- **Inference Context (The Blind Validation Trap)**: Pipelines containing stateful transformers (Lags, Rolling Windows, Levels) MUST be provided with sufficient historical context during `predict()` calls. Predicting on a standalone validation/test slice without its historical "tail" results in feature-dropout (zeroed values).
 - **Leveling Protocol**: Any historical average or "Level" must be computed using a strict lag of $\ge 16$ days (competition horizon) to prevent look-ahead bias during out-of-fold validation and final inference.
 
 ## 3. Knowledge Graph Nodes (Cross-Links)

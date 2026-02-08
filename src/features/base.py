@@ -8,6 +8,7 @@ class BaseTimeSeriesTransformer(BaseEstimator, TransformerMixin):
     """
 
     def fit(self, X, y=None):
+        self.fitted_ = True
         return self
 
     def transform(self, X):

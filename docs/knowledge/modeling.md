@@ -6,6 +6,7 @@
 
 - **Axiom 3: Level Scaling Consistency**: If the target is log-transformed, volume-based baseline features (Levels/Averages) should also be log-transformed (e.g., `log1p(sales_mean_365)`) to maintain linear intercept logic in the trend model.
 - **Axiom 4: Feature Competition (Multicollinearity)**: Use of an "Adaptive Intercept" (Rolling Mean Level) creates high redundancy with the "Global Trend" (`time_idx`). Linear estimators (Ridge) will favor the adaptive level, potentially resulting in zero coefficients for the global trend.
+- **Axiom 5: Volume Calibration**: The Trend component MUST represent the primary signal magnitude (baseline volume). If the trend is flat or significantly lower than actuals, the residual model (LGBM) is forced to learn the "Unit Identity" instead of "Seasonality", leading to poor extrapolation.
 
 ## Constraints
 - **Constraint 1: Target Invariance**: The model components must operate on the same target space (Real OR Log-Space) to ensure residuals `y - y_pred` are mathematically meaningful for the second stage.

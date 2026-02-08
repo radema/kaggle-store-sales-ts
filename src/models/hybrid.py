@@ -5,11 +5,16 @@ from lightgbm import LGBMRegressor
 
 class HybridRegressor(BaseEstimator, RegressorMixin):
     def __init__(
-        self, trend_estimator=None, residual_estimator=None, feature_selector=None
+        self,
+        trend_estimator=None,
+        residual_estimator=None,
+        feature_selector=None,
+        compose_mode="additive",
     ):
         self.trend_estimator = trend_estimator
         self.residual_estimator = residual_estimator
         self.feature_selector = feature_selector
+        self.compose_mode = compose_mode  # "additive" or "multiplicative"
 
         # Internal state
         self.trend_estimator_ = None
@@ -57,7 +62,12 @@ class HybridRegressor(BaseEstimator, RegressorMixin):
 
         # Calculate residuals
         y_trend_pred = self.trend_estimator_.predict(X_trend)
-        y_resid = y - y_trend_pred
+
+        if self.compose_mode == "multiplicative":
+            # Prevent division by zero
+            y_resid = y / (y_trend_pred + 1e-9)
+        else:
+            y_resid = y - y_trend_pred
 
         # Prepare data for residuals
         X_resid = self._select_features(X, 1)
@@ -80,8 +90,13 @@ class HybridRegressor(BaseEstimator, RegressorMixin):
         y_trend_pred = self.trend_estimator_.predict(X_trend)
         y_resid_pred = self.residual_estimator_.predict(X_resid)
 
+        if self.compose_mode == "multiplicative":
+            total = y_trend_pred * y_resid_pred
+        else:
+            total = y_trend_pred + y_resid_pred
+
         return {
             "trend": y_trend_pred,
             "residual": y_resid_pred,
-            "total": y_trend_pred + y_resid_pred,
+            "total": total,
         }

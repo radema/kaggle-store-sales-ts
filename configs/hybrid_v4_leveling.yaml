@@ -6,20 +6,19 @@ data:
   train_path: data/raw/train.csv
 model:
   feature_selector:
-    - [time_idx, level_sales_365]
-    - [month, dayofweek, level_sales_30,lag_16_sales, lag_21_sales, lag_28_sales, store_nbr, family_enc, is_holiday, is_wage_day, onpromotion]
+    - [time_idx, level_sales_365, store_nbr, family_enc] # High-level volume anchors
+    - [month, dayofweek, level_sales_30, lag_16_sales, lag_21_sales, lag_28_sales, is_holiday, is_wage_day, onpromotion] # Fine-grained residuals
   residual_estimator:
     class: lightgbm.LGBMRegressor
     params:
-      learning_rate: 0.07
-      n_estimators: 200
-      max_depth: 7
-      num_leaves: 31
+      learning_rate: 0.1 # Faster learning for residuals
+      n_estimators: 300
+      max_depth: 8
+      num_leaves: 63
       verbosity: -1
   trend_estimator:
-    class: sklearn.linear_model.Ridge
-    params:
-      alpha: 0.7
+    class: src.models.scaled_linear.ScaledTrendRegressor
+    params: {}
 pipeline:
   steps:
   - class: src.features.dates.DatePartTransformer
