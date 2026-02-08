@@ -138,13 +138,13 @@ class HybridRunner:
             oof_results.append(report["detailed"])
 
         # Combine all OOF results
-        self.oof_detailed = pd.concat(oof_results).sort_index()
+        self.oof_detailed = pd.concat(oof_results, ignore_index=True)
         self.metrics = harness.evaluate(
             self.oof_detailed[["sales", "store_nbr", "family", "date"]],
             self.oof_detailed["sales_pred"],
         )
 
-        print(f"CV Global RMSLE: {self.metrics['global_rmsle']:.4f}")
+        harness.print_summary(self.metrics)
         return self.metrics
 
     def train_full(self):
@@ -216,8 +216,12 @@ class HybridRunner:
         if hasattr(self, "metrics"):
             # Serialize per_store and per_family which are series
             metrics_to_save = self.metrics.copy()
-            metrics_to_save["per_store"] = metrics_to_save["per_store"].to_dict()
-            metrics_to_save["per_family"] = metrics_to_save["per_family"].to_dict()
+            metrics_to_save["per_store"] = (
+                metrics_to_save["per_store"].sort_values(ascending=False).to_dict()
+            )
+            metrics_to_save["per_family"] = (
+                metrics_to_save["per_family"].sort_values(ascending=False).to_dict()
+            )
             del metrics_to_save["detailed"]  # Don't save full DF in JSON
 
             with open(path / "metrics.json", "w") as f:

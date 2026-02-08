@@ -33,5 +33,8 @@ def test_evaluation_suite_metrics():
     # Check structure
     assert "per_family" in report
     assert "detailed" in report
+    assert "worst_5_stores" in report
+    assert "worst_5_families" in report
+
     assert len(report["detailed"]) == len(df)
     assert "residual" in report["detailed"].columns

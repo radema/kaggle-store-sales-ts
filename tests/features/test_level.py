@@ -1,4 +1,3 @@
-import pytest
 import pandas as pd
 import numpy as np
 from src.features.level import LevelTransformer
@@ -6,11 +5,6 @@ from src.features.level import LevelTransformer
 
 def test_level_transformer_basic():
     # Sequence of sales: 0, 1, 2, 3, 4, ...
-    # We want to check value at index 20 (day 20)
-    # With shift=16 and window=3:
-    # It should look at sales at indices [20-16, 20-17, 20-18] = [4, 3, 2]
-    # Sales values: 4, 3, 2 -> mean = 3.0
-
     dates = pd.date_range("2021-01-01", periods=30)
     df = pd.DataFrame(
         {
@@ -38,12 +32,13 @@ def test_level_transformer_basic():
     assert X.iloc[20][col_name] == 3.0
 
     # At index 15 (less than 16 days since start)
-    # Shifted values are NaN
-    assert np.isnan(X.iloc[15][col_name])
+    # The default behavior of shift(16) followed by rolling(3, min_periods=1).mean()
+    # will result in NaN for indices < 16.
+    # We use fillna(0) in the transformer.
+    assert X.iloc[15][col_name] == 0.0
 
 
 def test_level_transformer_global_mean():
-    # If window is None, it should compute the global mean up to t-16
     dates = pd.date_range("2021-01-01", periods=30)
     df = pd.DataFrame(
         {
@@ -53,11 +48,6 @@ def test_level_transformer_global_mean():
             "sales": [10.0] * 10 + [20.0] * 20,
         }
     )
-
-    # At t=20, t-16 is t=4. Sales[0:5] are all 10.0. Mean is 10.0
-    # At t=30? No, let's say t=25. t-16 is t=9. Sales[0:10] are 10.0. Mean is 10.0.
-    # At t=28. t-16 is t=12. Sales[0:10] are 10.0, Sales[10:13] are 20.0.
-    # Count: 10*10 + 3*20 = 100 + 60 = 160. Mean = 160/13 = 12.307
 
     transformer = LevelTransformer(
         window=None,  # Global
@@ -92,8 +82,4 @@ def test_level_transformer_fallback():
     X = transformer.fit_transform(df)
     col_name = "level_sales_30"
 
-    # No data available at t-16
-    # If we use raw expansion, it's NaN.
-    # But the spec says "fallback to a constant 0 if no data is available".
-    # This usually means after computing rolling, fillna(0)
     assert X.iloc[0][col_name] == 0.0

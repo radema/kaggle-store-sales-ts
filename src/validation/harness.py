@@ -65,14 +65,39 @@ class EvaluationSuite:
         per_store = results.groupby("store_nbr")["sq_log_error"].mean().apply(np.sqrt)
         per_family = results.groupby("family")["sq_log_error"].mean().apply(np.sqrt)
 
+        # Rankings for the summary
+        worst_5_stores = per_store.sort_values(ascending=False).head(5)
+        worst_5_families = per_family.sort_values(ascending=False).head(5)
+
         report = {
             "global_rmsle": global_rmsle,
             "per_store": per_store,
             "per_family": per_family,
+            "worst_5_stores": worst_5_stores,
+            "worst_5_families": worst_5_families,
             "detailed": results,
         }
 
         return report
+
+    def print_summary(self, report):
+        """
+        Prints a text summary of the evaluation results.
+        """
+        print("\n" + "=" * 40)
+        print("📊 FORECASTING EVALUATION SUMMARY")
+        print("=" * 40)
+        print(f"Global RMSLE: {report['global_rmsle']:.4f}")
+        print("-" * 40)
+
+        print("\nTop 5 Worst Stores (RMSLE):")
+        for store, error in report["worst_5_stores"].items():
+            print(f"  Store {store:2}: {error:.4f}")
+
+        print("\nTop 5 Worst Families (RMSLE):")
+        for family, error in report["worst_5_families"].items():
+            print(f"  {family:20}: {error:.4f}")
+        print("=" * 40 + "\n")
 
     def plot_errors(self, report, title_suffix=""):
         """
