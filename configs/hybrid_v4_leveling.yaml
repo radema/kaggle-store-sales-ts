@@ -7,7 +7,7 @@ data:
 model:
   feature_selector:
     - [time_idx, level_sales_365]
-    - [month, dayofweek, lag_16_sales, lag_21_sales, lag_28_sales, store_nbr, family_enc, is_holiday, is_wage_day, onpromotion]
+    - [month, dayofweek, level_sales_30,lag_16_sales, lag_21_sales, lag_28_sales, store_nbr, family_enc, is_holiday, is_wage_day, onpromotion]
   residual_estimator:
     class: lightgbm.LGBMRegressor
     params:
@@ -69,7 +69,7 @@ pipeline:
       value: 0
 run_name: hybrid_v4_leveling
 validation:
-  n_folds: 5
+  n_folds: 7
   target_transform: log1p
   train_days: 365
   val_days: 15
