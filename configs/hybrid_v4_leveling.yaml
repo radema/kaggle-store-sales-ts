@@ -47,11 +47,13 @@ pipeline:
     params:
       window: 30
       target_col: sales
+      log_transform: true
   - class: src.features.level.LevelTransformer
     name: levels_365
     params:
       window: 365
       target_col: sales
+      log_transform: true
   - class: src.features.lags.LagTransformer
     name: lags
     params:

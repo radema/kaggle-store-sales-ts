@@ -18,12 +18,20 @@ class LevelTransformer(BaseTimeSeriesTransformer):
         Value to use when no historical data is available (default: 0.0).
     """
 
-    def __init__(self, window=None, target_col="sales", groupby=None, fallback=0.0):
+    def __init__(
+        self,
+        window=None,
+        target_col="sales",
+        groupby=None,
+        fallback=0.0,
+        log_transform=False,
+    ):
         super().__init__()
         self.window = window
         self.target_col = target_col
         self.groupby = groupby or ["store_nbr", "family"]
         self.fallback = fallback
+        self.log_transform = log_transform
 
     def transform(self, X):
         X = X.copy()
@@ -59,5 +67,10 @@ class LevelTransformer(BaseTimeSeriesTransformer):
                 res = X[self.target_col].shift(16).expanding(min_periods=1).mean()
 
         X[column_name] = res.fillna(self.fallback)
+
+        if self.log_transform:
+            import numpy as np
+
+            X[column_name] = np.log1p(X[column_name])
 
         return X
