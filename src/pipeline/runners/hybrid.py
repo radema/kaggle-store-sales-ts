@@ -214,18 +214,23 @@ class HybridRunner:
 
         # 2. Metrics
         if hasattr(self, "metrics"):
-            # Serialize per_store and per_family which are series
-            metrics_to_save = self.metrics.copy()
-            metrics_to_save["per_store"] = (
-                metrics_to_save["per_store"].sort_values(ascending=False).to_dict()
-            )
-            metrics_to_save["per_family"] = (
-                metrics_to_save["per_family"].sort_values(ascending=False).to_dict()
-            )
-            del metrics_to_save["detailed"]  # Don't save full DF in JSON
-
-            with open(path / "metrics.json", "w") as f:
-                json.dump(metrics_to_save, f, indent=4)
+            # Write simple summary to text file to avoid serialization headaches
+            with open(path / "metrics_summary.txt", "w") as f:
+                f.write(f"Global RMSLE: {self.metrics['global_rmsle']:.4f}\n\n")
+                f.write("Top Worst Stores:\n")
+                f.write(
+                    self.metrics["per_store"]
+                    .sort_values(ascending=False)
+                    .head(10)
+                    .to_string()
+                )
+                f.write("\n\nTop Worst Families:\n")
+                f.write(
+                    self.metrics["per_family"]
+                    .sort_values(ascending=False)
+                    .head(10)
+                    .to_string()
+                )
 
         # 3. OOF Residuals
         if hasattr(self, "oof_detailed"):
