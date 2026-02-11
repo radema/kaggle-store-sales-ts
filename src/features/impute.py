@@ -1,6 +1,6 @@
 from typing import List, Optional, Union
 import pandas as pd
-from .base import BaseTimeSeriesTransformer
+from src.features.base import BaseTimeSeriesTransformer
 
 
 class TimeSeriesImputer(BaseTimeSeriesTransformer):
@@ -10,12 +10,12 @@ class TimeSeriesImputer(BaseTimeSeriesTransformer):
         value: Union[int, float] = 0,
         columns: Optional[List[str]] = None,
     ):
+        super().__init__()
         self.method = method
         self.value = value
         self.columns = columns
 
-    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
-        self.check_leakage(X)
+    def _transform(self, X: pd.DataFrame) -> pd.DataFrame:
         X = X.copy()
         cols = self.columns if self.columns else X.columns
         methods = [self.method] if isinstance(self.method, str) else self.method
