@@ -1,6 +1,5 @@
 from src.features.base import BaseTimeSeriesTransformer
 import pandas as pd
-import numpy as np
 
 
 class RollingWindowTransformer(BaseTimeSeriesTransformer):
@@ -25,7 +24,7 @@ class RollingWindowTransformer(BaseTimeSeriesTransformer):
         self.center = center
         self.min_periods = min_periods
 
-    def transform(self, X):
+    def _transform(self, X):
         X = X.copy()
 
         if not self.columns:

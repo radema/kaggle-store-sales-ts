@@ -26,7 +26,7 @@ class HolidayTransformer(BaseTimeSeriesTransformer):
         self.date_col = date_col
         self.store_col = store_col
 
-    def transform(self, X):
+    def _transform(self, X):
         X = X.copy()
 
         # Load data if paths are provided instead of DataFrames

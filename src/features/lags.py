@@ -1,6 +1,4 @@
 from src.features.base import BaseTimeSeriesTransformer
-import pandas as pd
-import numpy as np
 
 
 class LagTransformer(BaseTimeSeriesTransformer):
@@ -20,7 +18,7 @@ class LagTransformer(BaseTimeSeriesTransformer):
         self.groupby = groupby
         self.column = column
 
-    def transform(self, X):
+    def _transform(self, X):
         X = X.copy()
 
         if not self.column:

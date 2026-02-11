@@ -46,7 +46,7 @@ class CategoricalEncoder(BaseTimeSeriesTransformer):
         self.encoder_.fit(X[self.columns].astype(str))
         return self
 
-    def transform(self, X):
+    def _transform(self, X):
         if self.encoder_ is None or not self.columns:
             return X
 

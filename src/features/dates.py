@@ -29,7 +29,7 @@ class DatePartTransformer(BaseTimeSeriesTransformer):
         self.min_date_ = dates.min()
         return self
 
-    def transform(self, X):
+    def _transform(self, X):
         X = X.copy()
 
         # Determine source

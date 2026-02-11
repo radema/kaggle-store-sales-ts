@@ -33,7 +33,7 @@ class LevelTransformer(BaseTimeSeriesTransformer):
         self.fallback = fallback
         self.log_transform = log_transform
 
-    def transform(self, X):
+    def _transform(self, X):
         X = X.copy()
 
         # Check if target column exists
