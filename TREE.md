@@ -7,59 +7,62 @@
 ```
 .
 ├── .bolts/                  # Task-specific documentation (Specs, ADRs, MRPs)
-│   └── hybrid-baseline/     # Bolt #5: Hybrid experiment artifacts
+│   ├── hybrid-baseline/     # Bolt #5: Hybrid experiment artifacts
+│   └── data-processing-pipeline/ # Bolt #8: Preprocessing pipeline artifacts
 ├── artifacts/               # Model outputs, metrics, and submissions (GitIgnored)
 │   └── runs/                # Timestamped run outputs
 ├── configs/                 # YAML pipeline definitions
-│   └── hybrid_baseline.yaml # Main config for Hybrid Model
+│   ├── hybrid_baseline.yaml # Main config for Hybrid Model
+│   └── preprocessing.yaml   # Config for Bolt #8 Data Pipeline
+├── data/
+│   ├── raw/                 # Original Kaggle CSVs
+│   └── processed/           # Materialized Parquet files (train/test)
+├── logs/                    # Timestamped operation logs
 ├── src/
 │   ├── main.py              # CLI Entry point for all runners
-│   ├── data/                # Bolt #2: Data Pipeline Core
+│   ├── data/                # Bolt #2/8: Data Pipeline Core
 │   │   ├── __init__.py
-│   │   └── loader.py        # DataLoader with schema/date handling
+│   │   ├── loader.py        # DataLoader with unified loading
+│   │   └── make_dataset.py  # Data processing pipeline runner
 │   ├── features/            # Feature Engineering Logic
 │   │   ├── __init__.py
-│   │   ├── base.py          # BaseTimeSeriesTransformer (Leakage Checks)
-│   │   ├── encoding.py          # CategoricalEncoder (Ordinal encoding)
-│   │   ├── impute.py        # TimeSeriesImputer (ffill, bfill, interpolate)
-│   │   ├── dates.py         # DatePartTransformer (Year, Month, Day, Weekday)
-│   │   ├── lags.py          # LagTransformer (Shifted features)
-│   │   └── rolling.py       # RollingWindowTransformer (Mean, Std, Min, Max)
-│   ├── pipeline/            # Component Orchestration (Bolt #5)
+│   │   ├── base.py          # BaseTimeSeriesTransformer (Logging & Validation)
+│   │   ├── alignment.py     # DateGridTransformer (Optional gap filling)
+│   │   ├── dates.py         # DatePartTransformer
+│   │   ├── encoding.py      # CategoricalEncoder
+│   │   ├── imputation.py    # ConfigurableImputer (Intentional handling)
+│   │   ├── impute.py        # Standard TimeSeriesImputer
+│   │   ├── lags.py          # LagTransformer
+│   │   ├── meta.py          # OilMerger, StoreMerger
+│   │   ├── rolling.py       # RollingWindowTransformer
+│   │   └── transactions.py  # TransactionMerger (Validation & Imputation)
+│   ├── pipeline/            # Component Orchestration
 │   │   ├── __init__.py
-│   │   ├── factory.py       # FeaturePipelineFactory
-│   │   ├── runners/         # Concrete experiment strategies
-│   │   │   └── hybrid.py    # HybridRunner (Load -> CV -> Train -> Predict)
-│   │   ├── config.py        # YAML loader utilities
-│   │   └── documentation.py # ModelCardGenerator
+│   │   ├── factory.py       # Scikit-learn Pipeline Factory
+│   │   ├── processing.py    # ProcessingPipelineFactory (Bolt #8)
+│   │   └── runners/         # Concrete experiment strategies
 │   ├── models/              # Bolt #4: Model Architectures
 │   │   ├── __init__.py
 │   │   └── hybrid.py        # HybridRegressor (Trend + Residuals)
+│   ├── utils/               # Shared utilities
+│   │   ├── logging.py       # Standardized session logging
+│   │   └── validation.py    # DataFrame sanity checks (Duplicates, Schema)
 │   └── validation/          # Bolt #1: Validation Framework
-│       ├── __init__.py
-│       ├── splitters.py     # TimeSeries Cross-Validation
-│       ├── harness.py       # EvaluationSuite
-│       └── metrics.py       # RMSLE
-├── notebooks/               # EDA and Reporting Notebooks
-│   ├── 01-eda-raw-data.ipynb
-│   └── reports/
-│       └── 02-residual-analysis.ipynb # Bolt #6 Analysis
-└── tests/                   # Test suite (pytest)
+├── tests/                   # Test suite (pytest)
+├── run_processing.py        # Root runner for data transformation
+└── TREE.md                  # This file
 ```
 
 ## Module Responsibilities
 
-### `pipeline/runners`
-- **Goal**: End-to-end experiment orchestration.
-- **Key Classes**: `HybridRunner`.
+### `data/make_dataset.py`
+- **Goal**: Transform raw data into a materialized feature store (Parquet).
+- **Behavior**: Config-driven, unified loading of train/test.
 
-### `pipeline`
-- **Goal**: Decouple logic from configuration and document models.
-- **Key Classes**: `FeaturePipelineFactory`, `ModelCardGenerator`.
+### `features/base.py`
+- **Goal**: Standardize transformer interfaces with logging and validation hooks.
+- **Hook**: `_transform` (Implementation) vs `transform` (Boilerplate).
 
-### `main.py`
-- **Goal**: Standard interface for running any experiment via CLI.
-
-### `models`
-- **Goal**: Modular ML model implementations.
-- **Key Classes**: `HybridRegressor` (Trend + Residual additive model).
+### `utils`
+- **logging.py**: Unique session logs per run with timestamps.
+- **validation.py**: Defensive checks for data integrity (nulls, duplicates, shape).
