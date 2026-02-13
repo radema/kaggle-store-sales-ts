@@ -14,8 +14,8 @@
 ├── configs/                 # YAML pipeline definitions
 │   └── baseline_gated.yaml  # Main config for Gated Hybrid Model
 ├── data/
-│   ├── raw/                 # Original Kaggle CSVs
-│   ├── processed/           # Materialized Parquet files (train/test)
+│   ├── raw/                 # Original Kaggle CSVs (GitIgnored)
+│   ├── processed/           # Materialized Parquet files (GitIgnored)
 ├── logs/                    # Timestamped operation logs
 ├── notebooks/
 │   ├── reports/
@@ -25,13 +25,14 @@
 │   ├── preprocess.py        # Pipeline for feature building
 │   └── train_baseline.py    # Iterative learning & submission runner
 ├── src/
-│   ├── main.py              # Tool entry point (Legacy)
-│   ├── data/                # Data loading utilities
-│   ├── features/            # Feature Engineering Logic (Transformers)
-│   ├── models/              # Model Architectures (HybridRegressor)
-│   ├── pipeline/            # Component Orchestration & Runners
-│   ├── utils/               # Shared utilities (Logging, Integrity)
-│   └── validation/          # Validation Framework (EvaluationSuite)
+│   ├── models/              # Model Architectures
+│   │   └── hybrid.py        # HybridRegressor (Trend + Residuals)
+│   ├── utils/               # Shared utilities
+│   │   └── logging.py       # Standardized session logging
+│   └── validation/          # Validation Framework
+│       ├── harness.py       # EvaluationSuite
+│       ├── metrics.py       # RMSLE and custom errors
+│       └── splitters.py     # TimeSeries Splitters
 ├── tests/                   # Test suite (pytest)
 └── TREE.md                  # This file
 ```
@@ -52,4 +53,4 @@
 
 ### `src/validation/harness.py`
 - **Goal**: Standardized model evaluation.
-- **Behavior**: Calculates RMSLE at global, store, and family levels; generates OOF prediction files.
+- **Behavior**: Calculates RMSLE at global, store, and family levels; generates OOF prediction files for analysis.

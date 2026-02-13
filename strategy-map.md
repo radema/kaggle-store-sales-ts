@@ -44,7 +44,7 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   Fix K-Fold: Shift to `GroupedTimeSeriesSplit` (Store x Family groups) to ensure representative performance metrics.
     *   Axiom: The "Overall Average" level for a segment must be computed using a rolling anchor ending at $t-16$ relative to the prediction point.
 
-*   **Bolt #8: Contextual Features & Trend Refinement [SEQUENTIAL]**
+*   **Bolt #8: Contextual Features & Trend Refinement [COMPLETED]**
     *   **Goal**: Integrate "World Context" and fix Trend/Level weighting issues.
     *   **Context Features**:
         *   **Oil**: Ingest `oil.csv` (fill missing, moving averages).
@@ -54,14 +54,16 @@ Predict store sales using a modular, scientifically rigorous approach, experimen
     *   **Analysis Upgrade**: Update notebook to drill down by Store Type, Cluster, and City to isolate skewed errors (e.g., Poultry/Meats).
     *   **Axiom**: Transaction counts are lagged-only.
 
-*   **Bolt #9: Standardization & Refactoring [SEQUENTIAL]**
-    *   Implement `BaseRunner` Strategy pattern.
-    *   Centralize Inference Context logic (Train+Test concatenation).
-    *   Unify YAML parsing and Metric reporting.
+*   **Bolt #9: Quality Assurance [TODO]**
     *   Integrate `ruff` for linting and pre-commits.
 
+*   **Parallel Track: Error Volatility Investigation [TODO]**
+    *   **High Volatility Families**: Deep dive into Lingerie, Liquor, and School Supplies.
+    *   **High Volatility Segments**: Analyze specifically Cluster (14, 11, 6), Type (C), and outlier stores/cities.
+    *   **July Seasonality**: Investigate the systemic high error volatility at the start of every July.
+
 ## Architectural Axioms (Knowledge Assets)
-1. **Feature Partitioning**: Trend models use temporal features (`time_idx`) and Levels; Residual models use non-linear features (Seasonal Lags, Holiday IDs).
+1. **Feature Partitioning**: Trend models use temporal features and Levels; Residual models use non-linear features (Seasonal Lags, Holiday IDs).
 2. **Direct Forecasting**: Lags must be $\ge H$ (forecast horizon, usually 16 days) to maintain inference consistency without recursive loops.
 3. **Leveling Axiom**: Any volume-based "Level" or "Average" feature must be computed using a window ending at $t-16$ relative to the prediction point to prevent look-ahead bias.
 
