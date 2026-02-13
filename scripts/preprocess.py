@@ -1,0 +1,285 @@
+import pandas as pd
+import numpy as np
+import sys
+import yaml
+from pathlib import Path
+from src.utils.logging import get_logger
+
+
+def log1p(x):
+    """Natural log scaling helper."""
+    return np.log1p(x)
+
+
+def expm1(x):
+    """Inverse natural log scaling helper."""
+    return np.expm1(x)
+
+
+def load_data(logger, raw_dir="data/raw"):
+    """Loads all raw datasets and returns a dictionary of DataFrames."""
+    raw_path = Path(raw_dir)
+    datasets = {}
+    files = {
+        "train": "train.csv",
+        "test": "test.csv",
+        "stores": "stores.csv",
+        "oil": "oil.csv",
+        "holidays": "holidays_events.csv",
+        "transactions": "transactions.csv",
+    }
+
+    for name, filename in files.items():
+        path = raw_path / filename
+        if not path.exists():
+            logger.error(f"File not found: {path}")
+            sys.exit(1)
+
+        logger.info(f"Loading {name} from {path}...")
+        datasets[name] = pd.read_csv(path)
+
+        # Immediate date conversion for relevant tables
+        if "date" in datasets[name].columns:
+            datasets[name]["date"] = pd.to_datetime(datasets[name]["date"])
+
+    return datasets
+
+
+def process_unification(logger, datasets):
+    """Concatenates train/test and performs initial joins."""
+    train = datasets["train"].copy()
+    test = datasets["test"].copy()
+
+    train["_set"] = "train"
+    test["_set"] = "test"
+    test["sales"] = 0.0  # Dummy for concat
+
+    df = pd.concat([train, test], axis=0).reset_index(drop=True)
+    logger.info(f"Unified dataset shape: {df.shape}")
+
+    # Store merge
+    row_count_before = len(df)
+    df = df.merge(datasets["stores"], on="store_nbr", how="left")
+    logger.info(f"Merged stores. Row count: {row_count_before} -> {len(df)}")
+
+    # Oil merge
+    oil = datasets["oil"].copy()
+    # Create complete date range to interpolate
+    full_dates = pd.date_range(oil["date"].min(), oil["date"].max(), freq="D")
+    oil = (
+        oil.set_index("date")
+        .reindex(full_dates)
+        .reset_index()
+        .rename(columns={"index": "date"})
+    )
+    oil["dcoilwtico"] = oil["dcoilwtico"].interpolate(method="linear").bfill()
+
+    row_count_before = len(df)
+    df = df.merge(oil, on="date", how="left")
+    logger.info(f"Merged oil. Row count: {row_count_before} -> {len(df)}")
+
+    # Transactions merge
+    row_count_before = len(df)
+    df = df.merge(datasets["transactions"], on=["date", "store_nbr"], how="left")
+    df["transactions"] = df["transactions"].fillna(0)
+    logger.info(f"Merged transactions. Row count: {row_count_before} -> {len(df)}")
+
+    return df
+
+
+def process_holidays(logger, df, holidays_df):
+    """Processes holidays and merges binary flags."""
+    # Filter transferred holidays (they are shifted to another date)
+    holidays = holidays_df[~holidays_df["transferred"]].copy()
+
+    # National Holidays
+    nat = holidays[holidays["locale"] == "National"].drop_duplicates("date").copy()
+    nat["is_nat_holiday"] = 1
+
+    # Regional Holidays (by State)
+    reg = (
+        holidays[holidays["locale"] == "Regional"]
+        .drop_duplicates(["date", "locale_name"])
+        .copy()
+    )
+    reg = reg.rename(columns={"locale_name": "state"})
+    reg["is_reg_holiday"] = 1
+
+    # Local Holidays (by City)
+    loc = (
+        holidays[holidays["locale"] == "Local"]
+        .drop_duplicates(["date", "locale_name"])
+        .copy()
+    )
+    loc = loc.rename(columns={"locale_name": "city"})
+    loc["is_loc_holiday"] = 1
+
+    row_count_before = len(df)
+
+    # Sequential merges
+    df = df.merge(nat[["date", "is_nat_holiday"]], on="date", how="left")
+    df = df.merge(
+        reg[["date", "state", "is_reg_holiday"]], on=["date", "state"], how="left"
+    )
+    df = df.merge(
+        loc[["date", "city", "is_loc_holiday"]], on=["date", "city"], how="left"
+    )
+
+    # Fill NAs with 0
+    holiday_cols = ["is_nat_holiday", "is_reg_holiday", "is_loc_holiday"]
+    df[holiday_cols] = df[holiday_cols].fillna(0).astype(int)
+
+    logger.info(f"Merged holidays. Row count: {row_count_before} -> {len(df)}")
+    return df
+
+
+def process_domain_features(logger, df):
+    """Calculates calendar features, rolling stats, proxies, and robust lags."""
+    logger.info("Starting domain feature engineering...")
+
+    # 1. Target Scaling
+    df["log1p_sales"] = log1p(df["sales"])
+
+    # 2. Calendar Features
+    df["year"] = df["date"].dt.year.astype(np.int16)
+    df["month"] = df["date"].dt.month.astype(np.int8)
+    df["day"] = df["date"].dt.day.astype(np.int8)
+    df["dayofweek"] = df["date"].dt.dayofweek.astype(np.int8)
+    df["is_weekend"] = (df["dayofweek"] >= 5).astype(np.int8)
+    df["is_wage_day"] = ((df["day"] == 15) | (df["date"].dt.is_month_end)).astype(
+        np.int8
+    )
+    df["is_year_start"] = (df["date"].dt.is_year_start).astype(np.int8)
+    df["is_year_end"] = (df["date"].dt.is_year_end).astype(np.int8)
+
+    # Cyclic seasonality
+    day_of_year = df["date"].dt.dayofyear
+    df["sin_day_year"] = np.sin(2 * np.pi * day_of_year / 365.25).astype(np.float32)
+    df["cos_day_year"] = np.cos(2 * np.pi * day_of_year / 365.25).astype(np.float32)
+
+    # 3. Rolling 30-day Mean (excluding current row via shift)
+    # We sort by date to ensure rolling works correctly
+    df = df.sort_values(["store_nbr", "family", "date"])
+
+    df["rolling_30_sales"] = (
+        df.groupby(["store_nbr", "family"])["log1p_sales"]
+        .transform(lambda x: x.shift(1).rolling(window=30, min_periods=1).mean())
+        .fillna(0)
+    )
+
+    # 4. is_closed Flag (Redefined by rolling average)
+    # 1 if rolling average is 0 (inactive or not yet opened), 0 otherwise
+    df["is_closed"] = (df["rolling_30_sales"] == 0).astype(np.int8)
+    logger.info(
+        f"Redefined is_closed via rolling average. {df['is_closed'].sum()} rows marked as closed."
+    )
+
+    # 5. Cluster Proxy (Average sales for family in cluster on specific date)
+    cluster_proxy = (
+        df.groupby(["date", "cluster", "family"])["log1p_sales"]
+        .mean()
+        .reset_index()
+        .rename(columns={"log1p_sales": "cluster_sales_proxy"})
+    )
+    df = df.merge(cluster_proxy, on=["date", "cluster", "family"], how="left")
+
+    # 6. Robust Lags [7, 14, 21, 28]
+    lags = [7, 14, 21, 28]
+    for lag in lags:
+        logger.info(f"Calculating lag {lag}...")
+        col_name = f"lag_{lag}"
+        proxy_col_name = f"lag_{lag}_proxy"
+
+        # Actual lag
+        df[col_name] = df.groupby(["store_nbr", "family"])["log1p_sales"].shift(lag)
+
+        # Proxy lag (using the same shift on the cluster-family-date average)
+        df[proxy_col_name] = df.groupby(["store_nbr", "family"])[
+            "cluster_sales_proxy"
+        ].shift(lag)
+
+        # Impute missing actual lags with proxy lags
+        df[col_name] = df[col_name].fillna(df[proxy_col_name])
+
+        # Cleanup proxy column
+        df = df.drop(columns=[proxy_col_name])
+
+    # Drop intermediate proxy column
+    df = df.drop(columns=["cluster_sales_proxy"])
+
+    return df
+
+
+def save_feature_catalog(logger, df, path):
+    """Generates a YAML feature catalog from the processed training dataframe."""
+    logger.info(f"Generating feature catalog at {path}...")
+
+    catalog = {
+        "metadata": ["id", "date"],
+        "target": ["sales", "log1p_sales"],
+        "categorical_features": [],
+        "numerical_features": [],
+        "all_features": [],
+    }
+
+    # Exclude meta and target for feature lists
+    exclude = catalog["metadata"] + catalog["target"]
+
+    for col in df.columns:
+        if col in exclude:
+            continue
+
+        catalog["all_features"].append(col)
+        if df[col].dtype in ["object", "category"]:
+            catalog["categorical_features"].append(col)
+        else:
+            catalog["numerical_features"].append(col)
+
+    with open(path, "w") as f:
+        yaml.dump(catalog, f, default_flow_style=False, sort_keys=False)
+
+    logger.info("Feature catalog saved.")
+
+
+def main():
+    logger = get_logger("preprocess")
+    logger.info("Starting preprocessing pipeline...")
+
+    # Phase 1: Foundation
+    datasets = load_data(logger)
+
+    # Phase 2: Unification & Joins
+    df = process_unification(logger, datasets)
+    df = process_holidays(logger, df, datasets["holidays"])
+
+    # Phase 3: Domain Features
+    df = process_domain_features(logger, df)
+
+    # Phase 4: Finalization
+    # Uniqueness Check
+    max_count = df.groupby(["date", "store_nbr", "family"]).size().max()
+    if max_count > 1:
+        logger.error(
+            f"Integrity Error: Found {max_count} duplicates for (date, store_nbr, family)"
+        )
+        sys.exit(1)
+
+    # Saving
+    data_dir = Path("data/processed")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    train_out = df[df["_set"] == "train"].drop(columns=["_set"])
+    test_out = df[df["_set"] == "test"].drop(columns=["_set", "sales", "log1p_sales"])
+
+    train_out.to_parquet(data_dir / "train.parquet", index=False)
+    test_out.to_parquet(data_dir / "test.parquet", index=False)
+
+    # Building Feature Catalog from train
+    save_feature_catalog(logger, train_out, data_dir / "feature_catalog.yaml")
+
+    logger.info(f"Final dataset shapes: Train {train_out.shape}, Test {test_out.shape}")
+    logger.info("Pipeline complete.")
+
+
+if __name__ == "__main__":
+    main()
