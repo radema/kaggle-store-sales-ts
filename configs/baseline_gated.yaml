@@ -1,0 +1,41 @@
+run_name: "gated_baseline_v1"
+
+model:
+  gate_feature: "is_closed"
+  compose_mode: "additive"
+  features:
+    trend: 
+      - "rolling_30_sales"
+      - "year"
+    residual:
+      - "family"
+      - "onpromotion"
+      - "city"
+      - "state"
+      - "type"
+      - "cluster"
+      - "dcoilwtico"
+      - "is_nat_holiday"
+      - "is_reg_holiday"
+      - "is_loc_holiday"
+      - "lag_7"
+      - "lag_14"
+      - "lag_21"
+      - "lag_28"
+      - "is_weekend"
+      - "is_wage_day"
+      - "sin_day_year"
+      - "cos_day_year"
+
+validation:
+  n_folds: 5
+  train_days: 730 # 2 years
+  val_days: 16 # Competitive window
+  target_col: "log1p_sales" # Note: we train directly on the pre-scaled log target
+
+# Categorical features that need encoding or special handling in LightGBM
+categoricals:
+  - "family"
+  - "city"
+  - "state"
+  - "type"

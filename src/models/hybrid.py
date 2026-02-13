@@ -9,11 +9,15 @@ class HybridRegressor(BaseEstimator, RegressorMixin):
         trend_estimator=None,
         residual_estimator=None,
         feature_selector=None,
+        gate_feature=None,
+        categorical_features=None,
         compose_mode="additive",
     ):
         self.trend_estimator = trend_estimator
         self.residual_estimator = residual_estimator
         self.feature_selector = feature_selector
+        self.gate_feature = gate_feature
+        self.categorical_features = categorical_features
         self.compose_mode = compose_mode  # "additive" or "multiplicative"
 
         # Internal state
@@ -54,26 +58,45 @@ class HybridRegressor(BaseEstimator, RegressorMixin):
             else LGBMRegressor()
         )
 
+        # Filtering logic for Gated Baseline
+        if self.gate_feature is not None:
+            # Only train on rows where the store/family is NOT closed
+            mask = X[self.gate_feature] == 0
+            X_fit = X[mask].copy()
+            y_fit = y[mask].copy()
+        else:
+            X_fit = X
+            y_fit = y
+
         # Prepare data for trend
-        X_trend = self._select_features(X, 0)
+        X_trend = self._select_features(X_fit, 0)
 
         # Fit trend
-        self.trend_estimator_.fit(X_trend, y)
+        self.trend_estimator_.fit(X_trend, y_fit)
 
         # Calculate residuals
         y_trend_pred = self.trend_estimator_.predict(X_trend)
 
         if self.compose_mode == "multiplicative":
             # Prevent division by zero
-            y_resid = y / (y_trend_pred + 1e-9)
+            y_resid = y_fit / (y_trend_pred + 1e-9)
         else:
-            y_resid = y - y_trend_pred
+            y_resid = y_fit - y_trend_pred
 
         # Prepare data for residuals
-        X_resid = self._select_features(X, 1)
+        X_resid = self._select_features(X_fit, 1)
 
         # Fit residuals
-        self.residual_estimator_.fit(X_resid, y_resid)
+        if (
+            isinstance(self.residual_estimator_, LGBMRegressor)
+            and self.categorical_features
+        ):
+            # Pass categoricals at fit time to avoid construction errors
+            self.residual_estimator_.fit(
+                X_resid, y_resid, categorical_feature=self.categorical_features
+            )
+        else:
+            self.residual_estimator_.fit(X_resid, y_resid)
 
         return self
 
@@ -94,6 +117,12 @@ class HybridRegressor(BaseEstimator, RegressorMixin):
             total = y_trend_pred * y_resid_pred
         else:
             total = y_trend_pred + y_resid_pred
+
+        # Apply gate if provided
+        if self.gate_feature is not None:
+            # total is a numpy array, X[self.gate_feature] needs to be aligned
+            gate_mask = X[self.gate_feature].values
+            total = total * (1 - gate_mask)
 
         return {
             "trend": y_trend_pred,
