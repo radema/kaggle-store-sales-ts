@@ -7,62 +7,49 @@
 ```
 .
 ├── .bolts/                  # Task-specific documentation (Specs, ADRs, MRPs)
-│   ├── hybrid-baseline/     # Bolt #5: Hybrid experiment artifacts
-│   └── data-processing-pipeline/ # Bolt #8: Preprocessing pipeline artifacts
+│   ├── baseline-rearchitecture/ # Bolt #9: Gated Hybrid Baseline
+│   └── data-processing-refactor/ # Legacy refactor artifacts
 ├── artifacts/               # Model outputs, metrics, and submissions (GitIgnored)
-│   └── runs/                # Timestamped run outputs
+│   └── baseline/            # Current baseline OOFs and Submissions
 ├── configs/                 # YAML pipeline definitions
-│   ├── hybrid_baseline.yaml # Main config for Hybrid Model
-│   └── preprocessing.yaml   # Config for Bolt #8 Data Pipeline
+│   └── baseline_gated.yaml  # Main config for Gated Hybrid Model
 ├── data/
 │   ├── raw/                 # Original Kaggle CSVs
-│   └── processed/           # Materialized Parquet files (train/test)
+│   ├── processed/           # Materialized Parquet files (train/test)
 ├── logs/                    # Timestamped operation logs
+├── notebooks/
+│   ├── reports/
+│   │   └── 02-residual-analysis.ipynb # Main model analysis tool
+│   └── 01-eda-raw-data.ipynb
+├── scripts/
+│   ├── preprocess.py        # Pipeline for feature building
+│   └── train_baseline.py    # Iterative learning & submission runner
 ├── src/
-│   ├── main.py              # CLI Entry point for all runners
-│   ├── data/                # Bolt #2/8: Data Pipeline Core
-│   │   ├── __init__.py
-│   │   ├── loader.py        # DataLoader with unified loading
-│   │   └── make_dataset.py  # Data processing pipeline runner
-│   ├── features/            # Feature Engineering Logic
-│   │   ├── __init__.py
-│   │   ├── base.py          # BaseTimeSeriesTransformer (Logging & Validation)
-│   │   ├── alignment.py     # DateGridTransformer (Optional gap filling)
-│   │   ├── dates.py         # DatePartTransformer
-│   │   ├── encoding.py      # CategoricalEncoder
-│   │   ├── imputation.py    # ConfigurableImputer (Intentional handling)
-│   │   ├── impute.py        # Standard TimeSeriesImputer
-│   │   ├── lags.py          # LagTransformer
-│   │   ├── meta.py          # OilMerger, StoreMerger
-│   │   ├── rolling.py       # RollingWindowTransformer
-│   │   └── transactions.py  # TransactionMerger (Validation & Imputation)
-│   ├── pipeline/            # Component Orchestration
-│   │   ├── __init__.py
-│   │   ├── factory.py       # Scikit-learn Pipeline Factory
-│   │   ├── processing.py    # ProcessingPipelineFactory (Bolt #8)
-│   │   └── runners/         # Concrete experiment strategies
-│   ├── models/              # Bolt #4: Model Architectures
-│   │   ├── __init__.py
-│   │   └── hybrid.py        # HybridRegressor (Trend + Residuals)
-│   ├── utils/               # Shared utilities
-│   │   ├── logging.py       # Standardized session logging
-│   │   └── validation.py    # DataFrame sanity checks (Duplicates, Schema)
-│   └── validation/          # Bolt #1: Validation Framework
+│   ├── main.py              # Tool entry point (Legacy)
+│   ├── data/                # Data loading utilities
+│   ├── features/            # Feature Engineering Logic (Transformers)
+│   ├── models/              # Model Architectures (HybridRegressor)
+│   ├── pipeline/            # Component Orchestration & Runners
+│   ├── utils/               # Shared utilities (Logging, Integrity)
+│   └── validation/          # Validation Framework (EvaluationSuite)
 ├── tests/                   # Test suite (pytest)
-├── run_processing.py        # Root runner for data transformation
 └── TREE.md                  # This file
 ```
 
 ## Module Responsibilities
 
-### `data/make_dataset.py`
-- **Goal**: Transform raw data into a materialized feature store (Parquet).
-- **Behavior**: Config-driven, unified loading of train/test.
+### `scripts/preprocess.py`
+- **Goal**: Transform raw data into materialized Parquet features.
+- **Behavior**: Deterministic, procedural logic for joins, holidays, and scaling.
 
-### `features/base.py`
-- **Goal**: Standardize transformer interfaces with logging and validation hooks.
-- **Hook**: `_transform` (Implementation) vs `transform` (Boilerplate).
+### `scripts/train_baseline.py`
+- **Goal**: Train and generate submissions for the Hybrid model.
+- **Behavior**: Implements iterative inference (day-by-day) to handle time-series lags correctly.
 
-### `utils`
-- **logging.py**: Unique session logs per run with timestamps.
-- **validation.py**: Defensive checks for data integrity (nulls, duplicates, shape).
+### `src/models/hybrid.py`
+- **Goal**: Implements `HybridRegressor` class.
+- **Behavior**: Combines a Trend model (Linear) and Residual model (GBM) with deterministic gating support.
+
+### `src/validation/harness.py`
+- **Goal**: Standardized model evaluation.
+- **Behavior**: Calculates RMSLE at global, store, and family levels; generates OOF prediction files.
