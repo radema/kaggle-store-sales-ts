@@ -114,23 +114,33 @@ class IterativeGatedRunner:
     def iterative_predict(self, model, context_df, dates):
         """Predicts day-by-day and updates context_df."""
         preds = []
+        trend_preds = []
+        resid_preds = []
         unique_dates = sorted(dates)
 
         for i, curr_date in enumerate(unique_dates):
             mask = context_df["date"] == curr_date
             X_step = context_df[mask]
 
-            # Predict
-            y_pred_step = model.predict(X_step)
+            # Predict components
+            comp = model.predict_components(X_step)
+            y_pred_step = comp["total"]
+
             context_df.loc[mask, "log1p_sales"] = y_pred_step
             preds.append(y_pred_step)
+            trend_preds.append(comp["trend"])
+            resid_preds.append(comp["residual"])
 
             # Update next date's features
             if i < len(unique_dates) - 1:
                 next_date = unique_dates[i + 1]
                 self.update_features_iterative(context_df, curr_date, next_date)
 
-        return np.concatenate(preds)
+        return {
+            "total": np.concatenate(preds),
+            "trend": np.concatenate(trend_preds),
+            "residual": np.concatenate(resid_preds),
+        }
 
     def run_cv(self):
         val_conf = self.config["validation"]
@@ -188,7 +198,8 @@ class IterativeGatedRunner:
             # Iterate
             # We need a context that includes train (for lags) and val (to fill with preds)
             # For simplicity, we use the whole 'df' and only work on the val slice
-            y_pred_log = self.iterative_predict(model, df, val_dates)
+            results = self.iterative_predict(model, df, val_dates)
+            y_pred_log = results["total"]
 
             # Invert transform for evaluation
             y_pred = np.expm1(y_pred_log)
@@ -199,7 +210,12 @@ class IterativeGatedRunner:
                 val_true[self.cat_cols]
             )
 
-            report = harness.evaluate(val_true, y_pred)
+            # Prepare extra columns for analysis
+            extra_cols = pd.DataFrame(
+                {"trend_log": results["trend"], "residual_log": results["residual"]}
+            )
+
+            report = harness.evaluate(val_true, y_pred, extra_cols=extra_cols)
             harness.print_summary(report)
             fold_metrics.append(report["global_rmsle"])
             all_oof_results.append(report["detailed"])
