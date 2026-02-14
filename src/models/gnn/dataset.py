@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from torch.utils.data import Dataset
 
 
@@ -29,16 +30,15 @@ class SalesGNNDataset(Dataset):
 
         if self.num_samples <= 0:
             raise ValueError(
-                f"Insufficient time steps ({self.num_time_steps}) for window {window} and horizon {horizon}"
+                f"Insufficient time steps ({self.num_time_steps}) for window {window} and horizon {horizon}. "
+                f"Need at least {window + horizon} steps, got {self.num_time_steps}."
             )
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
-        # enc_start = idx
         enc_end = idx + self.window
-        # dec_start = enc_end
         dec_end = enc_end + self.horizon
 
         # History (Encoder)
@@ -54,3 +54,50 @@ class SalesGNNDataset(Dataset):
         mask = self.is_open[:, enc_end:dec_end]
 
         return x_enc, x_dec, y, mask
+
+    @staticmethod
+    def from_df(df, stores_df, families, feature_cols, window, horizon):
+        """
+        Helper to construct the 3D tensors from a flat DataFrame.
+        Ordering: Stores -> Families -> Series (Store-Family)
+        """
+        num_stores = len(stores_df)
+        num_families = len(families)
+        num_series = num_stores * num_families
+        total_nodes = num_stores + num_families + num_series
+
+        all_dates = sorted(df["date"].unique())
+        num_time_steps = len(all_dates)
+        date_to_idx = {d: i for i, d in enumerate(all_dates)}
+
+        num_features = len(feature_cols)
+
+        features_arr = np.zeros(
+            (total_nodes, num_time_steps, num_features), dtype=np.float32
+        )
+        labels_arr = np.zeros((total_nodes, num_time_steps), dtype=np.float32)
+        is_open_arr = np.ones(
+            (total_nodes, num_time_steps), dtype=np.float32
+        )  # Default open for aggregators
+
+        # Series Mapping
+        store_map = {nbr: i for i, nbr in enumerate(stores_df["store_nbr"])}
+        family_map = {name: i for i, name in enumerate(families)}
+        series_offset = num_stores + num_families
+
+        # Fill Series Data
+        # We assume df is already sorted or we handle it via date mapping
+        for (s_nbr, f_name), group in df.groupby(["store_nbr", "family"]):
+            if s_nbr not in store_map or f_name not in family_map:
+                continue
+
+            s_idx = store_map[s_nbr]
+            f_idx = family_map[f_name]
+            node_idx = series_offset + (s_idx * num_families) + f_idx
+
+            t_indices = [date_to_idx[d] for d in group["date"]]
+            labels_arr[node_idx, t_indices] = group["log1p_sales"].values
+            is_open_arr[node_idx, t_indices] = (group["is_closed"] == 0).astype(int)
+            features_arr[node_idx, t_indices, :] = group[feature_cols].values
+
+        return SalesGNNDataset(features_arr, labels_arr, is_open_arr, window, horizon)

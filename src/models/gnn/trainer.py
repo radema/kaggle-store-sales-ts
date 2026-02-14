@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+from src.utils.logging import get_logger
 
 
 class CompositeLoss(nn.Module):
@@ -26,16 +27,23 @@ class CompositeLoss(nn.Module):
 class GNNTrainer:
     """
     Trainer for SalesGNN model.
-    Handles device placement, training loops, and predictions.
+    Handles device placement, training loops, and predictions with robust logging.
     """
 
-    def __init__(self, model, optimizer, alpha=0.01, device=None):
+    def __init__(
+        self, model, optimizer, alpha=0.01, device=None, patience=5, logger=None
+    ):
         self.device = device or torch.device(
             "cuda" if torch.cuda.is_available() else "cpu"
         )
         self.model = model.to(self.device)
         self.optimizer = optimizer
         self.loss_fn = CompositeLoss(alpha=alpha)
+        self.patience = patience
+        self.logger = logger or get_logger("gnn_trainer")
+        self.best_model_state = None
+        self.best_val_loss = float("inf")
+        self.history = {"train_loss": [], "val_loss": []}
 
     def train_step(self, x_enc, x_dec, y, mask):
         """Single optimization step."""
@@ -71,18 +79,19 @@ class GNNTrainer:
         return loss.item()
 
     def fit(self, train_loader, val_loader=None, epochs=20):
-        """Standard training loop."""
-        history = {"train_loss": [], "val_loss": []}
+        """Standard training loop with Early Stopping."""
+        self.logger.info(f"Starting training for {epochs} epochs on {self.device}")
+
+        early_stop_counter = 0
 
         for epoch in range(epochs):
             train_loss = 0
-            # Use tqdm if interactive, otherwise standard loop
             for batch in train_loader:
                 x_enc, x_dec, y, mask = batch
                 train_loss += self.train_step(x_enc, x_dec, y, mask)
 
             avg_train_loss = train_loss / len(train_loader)
-            history["train_loss"].append(avg_train_loss)
+            self.history["train_loss"].append(avg_train_loss)
 
             val_info = ""
             if val_loader:
@@ -91,14 +100,33 @@ class GNNTrainer:
                     x_enc, x_dec, y, mask = batch
                     val_loss += self.val_step(x_enc, x_dec, y, mask)
                 avg_val_loss = val_loss / len(val_loader)
-                history["val_loss"].append(avg_val_loss)
+                self.history["val_loss"].append(avg_val_loss)
                 val_info = f" | Val Loss: {avg_val_loss:.6f}"
 
-            print(
-                f"Epoch {epoch + 1}/{epochs} | Train Loss: {avg_train_loss:.6f}{val_info}"
+                # Early Stopping Logic
+                if avg_val_loss < self.best_val_loss:
+                    self.best_val_loss = avg_val_loss
+                    self.best_model_state = {
+                        k: v.cpu() for k, v in self.model.state_dict().items()
+                    }
+                    early_stop_counter = 0
+                else:
+                    early_stop_counter += 1
+
+            self.logger.info(
+                f"Epoch {epoch + 1:03d}/{epochs} | Train Loss: {avg_train_loss:.6f}{val_info}"
             )
 
-        return history
+            if early_stop_counter >= self.patience:
+                self.logger.info(f"Early stopping triggered at epoch {epoch + 1}")
+                break
+
+        if self.best_model_state:
+            self.logger.info("Restoring best model state...")
+            self.model.load_state_dict(self.best_model_state)
+            self.model.to(self.device)
+
+        return self.history
 
     def predict(self, loader):
         """Generates predictions for the entire loader."""

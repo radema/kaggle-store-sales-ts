@@ -1,0 +1,26 @@
+model:
+  hidden_dim: 32
+  heads: 1
+  alpha: 0.01 # L1 sparsity weight
+  window: 30
+  horizon: 16
+
+training:
+  epochs: 20
+  batch_size: 16
+  lr: 0.001
+  patience: 5
+  val_days: 16 # Use last horizon days for validation
+
+data:
+  train_start: "2017-01-01" # Start from 2017 for faster iteration
+  features:
+    - "onpromotion"
+    - "dcoilwtico"
+    - "is_nat_holiday"
+    - "is_reg_holiday"
+    - "is_loc_holiday"
+    - "sin_day_year"
+    - "cos_day_year"
+    - "dayofweek"
+    - "is_wage_day"
