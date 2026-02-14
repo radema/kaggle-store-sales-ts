@@ -116,15 +116,20 @@ class SalesGNN(nn.Module):
         device = x_enc.device
 
         # 0. Cache Node Embeddings
-        node_embed = self._get_node_embeddings(device)  # (Nodes, 2E)
+        node_embed = self._get_node_embeddings(device)  # (TotalNodes, 2E)
+
+        # Use embeddings for nodes present in batch
+        node_embed = node_embed[:num_nodes]
 
         # Optimize Encoder: Concat dynamic features and static embeddings
         # x_enc: (B, N, T, F) -> (B*N, T, F)
         x_enc_flat = x_enc.reshape(-1, seq_len, self.feature_dim)
 
-        # Expand static embeddings to match (B*N, T, 2E)
+        # Efficient expansion: (N, 2E) -> (B*N, T, 2E)
         node_embed_expanded = (
-            node_embed.repeat(batch_size, 1).unsqueeze(1).expand(-1, seq_len, -1)
+            node_embed.view(1, num_nodes, 1, self.total_embedding_dim)
+            .expand(batch_size, -1, seq_len, -1)
+            .reshape(-1, seq_len, self.total_embedding_dim)
         )
 
         x_enc_combined = torch.cat([x_enc_flat, node_embed_expanded], dim=-1)
@@ -143,8 +148,12 @@ class SalesGNN(nn.Module):
         hidden = h_spatial
         outputs = []
 
-        # Pre-expand node embeddings for decoder rollout
-        node_embed_dec_flat = node_embed.repeat(batch_size, 1)  # (B*N, 2E)
+        # Pre-expand node embeddings for decoder rollout: (B*N, 2E)
+        node_embed_dec_flat = (
+            node_embed.view(1, num_nodes, self.total_embedding_dim)
+            .expand(batch_size, -1, -1)
+            .reshape(-1, self.total_embedding_dim)
+        )
 
         for t in range(self.horizon):
             x_t = x_dec[:, :, t, :].reshape(-1, self.feature_dim)  # (B*N, F)
