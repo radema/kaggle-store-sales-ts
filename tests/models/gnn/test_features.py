@@ -1,7 +1,10 @@
 import pandas as pd
 import numpy as np
-import pytest
-from src.models.gnn.features import compute_is_open_past, compute_is_open_future
+from src.models.gnn.features import (
+    compute_is_open_past,
+    compute_is_open_future,
+    compute_calendar_features,
+)
 
 
 def test_is_open_past():
@@ -50,3 +53,22 @@ def test_is_open_future():
     assert is_open.iloc[0] == 0
     # 2013-01-02 no holiday, should be open
     assert is_open.iloc[1] == 1
+
+
+def test_calendar_features():
+    dates = pd.to_datetime(["2013-01-15", "2013-01-31", "2013-02-01"])
+    df = compute_calendar_features(pd.Series(dates))
+
+    # 15th and 31st are paydays
+    assert df.loc[0, "is_payday"] == 1
+    assert df.loc[1, "is_payday"] == 1
+    assert df.loc[2, "is_payday"] == 0
+
+    # Check cyclical (dow, dom, month)
+    # Jan 15, 2013 was a Tuesday (dow=1)
+    expected_dow_sin = np.sin(2 * np.pi * 1 / 7)
+    assert np.isclose(df.loc[0, "dow_sin"], expected_dow_sin)
+
+    # Month is Jan (month=1, encoding uses month-1=0)
+    assert df.loc[0, "month_sin"] == 0
+    assert df.loc[0, "month_cos"] == 1

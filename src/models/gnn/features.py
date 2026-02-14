@@ -47,7 +47,7 @@ def compute_is_open_future(dates, holidays_df, store_info):
     holidays_df["date"] = pd.to_datetime(holidays_df["date"])
 
     # Filter valid holidays (not transferred)
-    active_holidays = holidays_df[holidays_df["transferred"] == False]
+    active_holidays = holidays_df[~holidays_df["transferred"]]
 
     # 1. National Holidays
     national = active_holidays[active_holidays["locale"] == "National"]
@@ -72,3 +72,39 @@ def compute_is_open_future(dates, holidays_df, store_info):
     is_open[dates.dt.month == 1] &= (dates.dt.day != 1).astype(int)
 
     return is_open
+
+
+def compute_calendar_features(dates):
+    """
+    Computes cyclical calendar features (sin/cos) and is_payday flag.
+
+    Args:
+        dates: pd.Series of datetime objects.
+
+    Returns:
+        pd.DataFrame: DataFrame with calendar features.
+    """
+    df = pd.DataFrame(index=dates.index)
+    dates = pd.to_datetime(dates)
+
+    # 1. Day of Week (0-6)
+    dow = dates.dt.dayofweek
+    df["dow_sin"] = np.sin(2 * np.pi * dow / 7)
+    df["dow_cos"] = np.cos(2 * np.pi * dow / 7)
+
+    # 2. Day of Month (1-31)
+    dom = dates.dt.day
+    df["dom_sin"] = np.sin(2 * np.pi * (dom - 1) / 31)
+    df["dom_cos"] = np.cos(2 * np.pi * (dom - 1) / 31)
+
+    # 3. Month (1-12)
+    month = dates.dt.month
+    df["month_sin"] = np.sin(2 * np.pi * (month - 1) / 12)
+    df["month_cos"] = np.cos(2 * np.pi * (month - 1) / 12)
+
+    # 4. Is Payday (15th and Last day of month)
+    is_15th = dom == 15
+    is_last = dates.dt.is_month_end
+    df["is_payday"] = (is_15th | is_last).astype(int)
+
+    return df

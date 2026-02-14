@@ -8,7 +8,7 @@
 .
 ├── .bolts/                  # Task-specific documentation (Specs, ADRs, MRPs)
 │   ├── baseline-rearchitecture/ # Bolt #9: Gated Hybrid Baseline
-│   └── data-processing-refactor/ # Legacy refactor artifacts
+│   └── gnn-design/              # Bolt #10: ST-GNN Implementation
 ├── artifacts/               # Model outputs, metrics, and submissions (GitIgnored)
 │   └── baseline/            # Current baseline OOFs and Submissions
 ├── configs/                 # YAML pipeline definitions
@@ -26,7 +26,11 @@
 │   └── train_baseline.py    # Iterative learning & submission runner
 ├── src/
 │   ├── models/              # Model Architectures
-│   │   └── hybrid.py        # HybridRegressor (Trend + Residuals)
+│   │   ├── hybrid.py        # HybridRegressor (Trend + Residuals)
+│   │   └── gnn/             # Spatio-Temporal Graph Neural Network
+│   │       ├── dataset.py   # Seq2Seq sliding window tensors
+│   │       ├── features.py  # is_open & Calendar engineering
+│   │       └── graph.py     # Hierarchical & Spatial adjacency
 │   ├── utils/               # Shared utilities
 │   │   └── logging.py       # Standardized session logging
 │   └── validation/          # Validation Framework
@@ -54,3 +58,7 @@
 ### `src/validation/harness.py`
 - **Goal**: Standardized model evaluation.
 - **Behavior**: Calculates RMSLE at global, store, and family levels; generates OOF prediction files for analysis.
+
+### `src/models/gnn/`
+- **Goal**: Implements ST-GNN for multi-series forecasting.
+- **Behavior**: Sequence-to-Sequence learning with graph-based feature mixing and hard gating.
