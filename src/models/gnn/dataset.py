@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+from pathlib import Path
 from torch.utils.data import Dataset
 
 
@@ -12,20 +13,33 @@ class SalesGNNDataset(Dataset):
     def __init__(self, features, labels, is_open, window, horizon):
         """
         Args:
-            features: np.array of shape (Nodes, Time, Features)
-            labels: np.array of shape (Nodes, Time)
-            is_open: np.array of shape (Nodes, Time)
+            features: np.array or torch.Tensor of shape (Nodes, Time, Features)
+            labels: np.array or torch.Tensor of shape (Nodes, Time)
+            is_open: np.array or torch.Tensor of shape (Nodes, Time)
             window: int, input sequence length (T_in)
             horizon: int, forecast horizon (T_out)
         """
-        self.features = torch.from_numpy(features).float()
-        self.labels = torch.from_numpy(labels).float()
-        self.is_open = torch.from_numpy(is_open).float()
+        # Ensure we have tensors
+        if isinstance(features, np.ndarray):
+            self.features = torch.from_numpy(features).float()
+        else:
+            self.features = features.float()
+
+        if isinstance(labels, np.ndarray):
+            self.labels = torch.from_numpy(labels).float()
+        else:
+            self.labels = labels.float()
+
+        if isinstance(is_open, np.ndarray):
+            self.is_open = torch.from_numpy(is_open).float()
+        else:
+            self.is_open = is_open.float()
+
         self.window = window
         self.horizon = horizon
 
         # Calculate valid starting indices for windows
-        self.num_time_steps = features.shape[1]
+        self.num_time_steps = self.features.shape[1]
         self.num_samples = self.num_time_steps - window - horizon + 1
 
         if self.num_samples <= 0:
@@ -54,6 +68,27 @@ class SalesGNNDataset(Dataset):
         mask = self.is_open[:, enc_end:dec_end]
 
         return x_enc, x_dec, y, mask
+
+    def save_to_cache(self, directory):
+        """Saves current tensors to a directory for later loading."""
+        path = Path(directory)
+        path.mkdir(parents=True, exist_ok=True)
+
+        np.save(path / "features.npy", self.features.numpy())
+        np.save(path / "labels.npy", self.labels.numpy())
+        np.save(path / "is_open.npy", self.is_open.numpy())
+
+    @classmethod
+    def load_from_cache(cls, directory, window, horizon, mmap=False):
+        """Loads tensors from a directory, optionally using memory mapping."""
+        path = Path(directory)
+        mmap_mode = "r" if mmap else None
+
+        features = np.load(path / "features.npy", mmap_mode=mmap_mode)
+        labels = np.load(path / "labels.npy", mmap_mode=mmap_mode)
+        is_open = np.load(path / "is_open.npy", mmap_mode=mmap_mode)
+
+        return cls(features, labels, is_open, window, horizon)
 
     @staticmethod
     def from_df(df, stores_df, families, feature_cols, window, horizon):

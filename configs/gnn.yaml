@@ -6,14 +6,14 @@ model:
   horizon: 16
 
 training:
-  epochs: 20
-  batch_size: 16
-  lr: 0.001
+  epochs: 200
+  batch_size: 32
+  lr: 0.03
   patience: 5
   val_days: 16 # Use last horizon days for validation
 
 data:
-  train_start: "2017-01-01" # Start from 2017 for faster iteration
+  train_start: "2013-01-01" # Full history
   features:
     - "onpromotion"
     - "dcoilwtico"

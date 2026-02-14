@@ -33,9 +33,16 @@ class GNNTrainer:
     def __init__(
         self, model, optimizer, alpha=0.01, device=None, patience=5, logger=None
     ):
-        self.device = device or torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
-        )
+        if device is None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            elif torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
+        else:
+            self.device = device
+
         self.model = model.to(self.device)
         self.optimizer = optimizer
         self.loss_fn = CompositeLoss(alpha=alpha)

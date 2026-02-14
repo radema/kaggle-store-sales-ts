@@ -1,6 +1,7 @@
 import sys
 import yaml
 import torch
+import numpy as np
 import pandas as pd
 from pathlib import Path
 from torch.utils.data import DataLoader
@@ -30,6 +31,7 @@ def main(config_path, dev_mode=False):
 
     # We use the processed parquet files as our source of truth for features and log-scales
     train_df = pd.read_parquet(data_dir / "train.parquet")
+    test_df = pd.read_parquet(data_dir / "test.parquet")
     stores_df = pd.read_csv(raw_dir / "stores.csv")
 
     if dev_mode:
@@ -59,7 +61,29 @@ def main(config_path, dev_mode=False):
     val_days = config["training"]["val_days"]
     feature_cols = config["data"]["features"]
 
+    cache_dir = data_dir / "gnn"
+    if cache_dir.exists() and (cache_dir / "features.npy").exists():
+        logger.info(f"Loading GNN Dataset from cache: {cache_dir}")
+        full_dataset = SalesGNNDataset.load_from_cache(
+            cache_dir, window, horizon, mmap=True
+        )
+    else:
+        logger.info(
+            "Cache not found. Building GNN Dataset from related scripts (Slow)..."
+        )
+        # Filters are applied inside from_df if we use train_df as input
+        full_dataset = SalesGNNDataset.from_df(
+            df=train_df,
+            stores_df=stores_df,
+            families=families,
+            feature_cols=feature_cols,
+            window=window,
+            horizon=horizon,
+        )
+
     # Time split: We need a buffer to ensure val_dataset has enough history (window)
+    # If we loaded from cache, we assume the dates match the full history
+    # We still need the dates to calculate the split point
     all_dates = sorted(train_df["date"].unique())
     num_time_steps = len(all_dates)
     train_limit_idx = num_time_steps - val_days
@@ -67,37 +91,19 @@ def main(config_path, dev_mode=False):
 
     logger.info(f"Splitting data at {train_limit_date} for validation.")
 
-    # Create complete dataset and then slice
-    # This is more efficient than pivoting twice
-    logger.info("Building GNN Dataset from related scripts...")
-    full_dataset = SalesGNNDataset.from_df(
-        df=train_df,
-        stores_df=stores_df,
-        families=families,
-        feature_cols=feature_cols,
-        window=window,
-        horizon=horizon,
-    )
-
     # Manual slicing for train/val
-    # Note: SalesGNNDataset handles the windowing, we just need to provide the right time slices
-    # However, our SalesGNNDataset currently stores full tensors.
-    # To split by time without re-pivoting, we can just slice the tensors.
-
-    # train_data: [:, :train_limit_idx, :]
     train_dataset = SalesGNNDataset(
-        features=full_dataset.features[:, :train_limit_idx, :].numpy(),
-        labels=full_dataset.labels[:, :train_limit_idx].numpy(),
-        is_open=full_dataset.is_open[:, :train_limit_idx].numpy(),
+        features=full_dataset.features[:, :train_limit_idx, :],
+        labels=full_dataset.labels[:, :train_limit_idx],
+        is_open=full_dataset.is_open[:, :train_limit_idx],
         window=window,
         horizon=horizon,
     )
 
-    # val_data: [:, train_limit_idx - window:, :]
     val_dataset = SalesGNNDataset(
-        features=full_dataset.features[:, train_limit_idx - window :, :].numpy(),
-        labels=full_dataset.labels[:, train_limit_idx - window :].numpy(),
-        is_open=full_dataset.is_open[:, train_limit_idx - window :].numpy(),
+        features=full_dataset.features[:, train_limit_idx - window :, :],
+        labels=full_dataset.labels[:, train_limit_idx - window :],
+        is_open=full_dataset.is_open[:, train_limit_idx - window :],
         window=window,
         horizon=horizon,
     )
@@ -156,6 +162,79 @@ def main(config_path, dev_mode=False):
     history_df.to_csv(output_dir / "training_history.csv", index=False)
 
     logger.info(f"Artifacts saved to {output_dir}")
+
+    # 9. Inference & Submission
+    logger.info("Starting inference for submission...")
+
+    # We need the last 'window' days of training data to provide history for the test set
+    last_train_date = train_df["date"].max()
+    start_history_date = last_train_date - pd.Timedelta(days=window - 1)
+
+    history_df = train_df[train_df["date"] >= start_history_date].copy()
+
+    # Prepare test_df: must have the same columns and order as train_df
+    # test.parquet is already processed, but we need dummy sales
+    inference_test_df = test_df.copy()
+    inference_test_df["log1p_sales"] = 0.0
+    inference_test_df["sales"] = 0.0
+
+    # Combine history and test
+    combined_inf_df = pd.concat([history_df, inference_test_df], axis=0).sort_values(
+        ["date", "store_nbr", "family"]
+    )
+
+    # Build a single-sample dataset for inference
+    logger.info("Building inference dataset...")
+    test_dataset = SalesGNNDataset.from_df(
+        df=combined_inf_df,
+        stores_df=stores_df,
+        families=families,
+        feature_cols=feature_cols,
+        window=window,
+        horizon=horizon,
+    )
+
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+    # Predict
+    logger.info("Running model forward pass...")
+    preds_log = trainer.predict(test_loader)  # (1, Nodes, Horizon)
+
+    # Invert log transform: exp(x) - 1
+    # We only care about the Series nodes (Store-Family pairs)
+    # Recall node indexing: [Stores, Families, Series]
+    series_offset = num_stores + num_families
+    series_preds_log = preds_log[0, series_offset:, :]  # (NumSeries, Horizon)
+
+    # Flatten to match test_df order (Date then Store then Family)
+    # The dataset was built using groupby(["store_nbr", "family"]) which matches our node order
+    # test_df is sorted by date, then store, then family.
+    # Our series_preds_log is (Series, Time).
+    # We need to transpose to (Time, Series) and then flatten to match test_df.
+    # Actually, test_df has Dates as outer loop, then Stores, then Families.
+    # our tensor is [Node, Time]. If we flatten it as is (C-order), it's Node0_T0, Node0_T1...
+    # We want T0_Node0, T0_Node1, ..., T0_NodeN, T1_Node0...
+
+    # Correct reshaping:
+    # 1. Transpose (Series, Horizon) -> (Horizon, Series)
+    # 2. Flatten -> (Horizon * Series,)
+    preds_final = torch.expm1(series_preds_log.t()).flatten().numpy()
+    preds_final = np.maximum(preds_final, 0)  # Clip negative sales
+
+    # Final Alignment Check
+    if len(preds_final) != len(test_df):
+        logger.error(
+            f"Prediction count mismatch! Preds: {len(preds_final)}, Test: {len(test_df)}"
+        )
+    else:
+        # Create submission
+        submission = test_df[["id"]].copy()
+        submission["sales"] = preds_final
+        submission = submission.sort_values("id")
+
+        sub_path = output_dir / "submission.csv"
+        submission.to_csv(sub_path, index=False)
+        logger.info(f"Submission saved to {sub_path}")
 
 
 if __name__ == "__main__":
