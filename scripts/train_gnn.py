@@ -81,15 +81,29 @@ def main(config_path, dev_mode=False):
             horizon=horizon,
         )
 
-    # Time split: We need a buffer to ensure val_dataset has enough history (window)
-    # If we loaded from cache, we assume the dates match the full history
-    # We still need the dates to calculate the split point
-    all_dates = sorted(train_df["date"].unique())
-    num_time_steps = len(all_dates)
-    train_limit_idx = num_time_steps - val_days
-    train_limit_date = all_dates[train_limit_idx]
+    # 4.1 Data Integrity Check (on final tensors)
+    if (
+        torch.isnan(full_dataset.features).any()
+        or torch.isinf(full_dataset.features).any()
+    ):
+        logger.warning("NaNs/Infs found in cache. Attempting local zero-imputation...")
+        full_dataset.features = torch.nan_to_num(
+            full_dataset.features, nan=0.0, posinf=0.0, neginf=0.0
+        )
 
-    logger.info(f"Splitting data at {train_limit_date} for validation.")
+    if torch.isnan(full_dataset.labels).any():
+        full_dataset.labels = torch.nan_to_num(full_dataset.labels, nan=0.0)
+
+    logger.info("Data integrity verified (Internal imputation applied).")
+
+    # Time split: Robust slicing relative to the ACTUAL cache size
+    num_cache_steps = full_dataset.features.shape[1]
+    train_limit_idx = num_cache_steps - val_days
+
+    logger.info(f"Cache time steps: {num_cache_steps}. Val days: {val_days}")
+    logger.info(
+        f"Slicing cache: Train until {train_limit_idx}, Val from {train_limit_idx - window}"
+    )
 
     # Manual slicing for train/val
     train_dataset = SalesGNNDataset(
@@ -145,8 +159,11 @@ def main(config_path, dev_mode=False):
     logger.info(f"Total Epochs: {len(history['train_loss'])}")
     logger.info(f"Best Val Loss: {trainer.best_val_loss:.6f}")
 
-    final_train_loss = history["train_loss"][-1]
-    logger.info(f"Final Train Loss: {final_train_loss:.6f}")
+    if history["train_loss"]:
+        final_train_loss = history["train_loss"][-1]
+        logger.info(f"Final Train Loss: {final_train_loss:.6f}")
+    else:
+        logger.warning("No epochs completed. Summary skipped.")
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model Complexity: {num_params} trainable parameters")

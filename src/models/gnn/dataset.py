@@ -131,8 +131,8 @@ class SalesGNNDataset(Dataset):
             node_idx = series_offset + (s_idx * num_families) + f_idx
 
             t_indices = [date_to_idx[d] for d in group["date"]]
-            labels_arr[node_idx, t_indices] = group["log1p_sales"].values
+            labels_arr[node_idx, t_indices] = group["log1p_sales"].fillna(0).values
             is_open_arr[node_idx, t_indices] = (group["is_closed"] == 0).astype(int)
-            features_arr[node_idx, t_indices, :] = group[feature_cols].values
+            features_arr[node_idx, t_indices, :] = group[feature_cols].fillna(0).values
 
         return SalesGNNDataset(features_arr, labels_arr, is_open_arr, window, horizon)

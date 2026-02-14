@@ -75,7 +75,7 @@ graph LR
     end
 
     subgraph Encoder_30_Days_HighSpeed
-        ConcatEnc[Concat Features + [Store_i, Family_j]]
+        ConcatEnc[Concat Features + Store_i /Family_j]
         GRU_Enc[GRU: Temporal Context]
         GAT_Mix[GATv2: One-shot Spatial Mix]
         X_enc --> ConcatEnc
@@ -86,7 +86,7 @@ graph LR
     end
 
     subgraph Decoder_State_Space_Rollout
-        ConcatDec[Concat Future + [Store_i, Family_j]]
+        ConcatDec[Concat Future + Store_i / Family_j]
         GRU_Cell[GRUCell: State Update]
         FC[Linear Output Layer]
         

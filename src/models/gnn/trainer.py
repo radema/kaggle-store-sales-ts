@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 from src.utils.logging import get_logger
 
 
@@ -66,7 +67,15 @@ class GNNTrainer:
 
         loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
+        if torch.isnan(loss):
+            self.logger.error("Loss is NaN during train step!")
+            return float("nan")
+
         loss.backward()
+
+        # Gradient clipping to prevent NaN on MPS/GPU
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+
         self.optimizer.step()
 
         return loss.item()
@@ -95,7 +104,13 @@ class GNNTrainer:
             train_loss = 0
             for batch in train_loader:
                 x_enc, x_dec, y, mask = batch
-                train_loss += self.train_step(x_enc, x_dec, y, mask)
+                loss = self.train_step(x_enc, x_dec, y, mask)
+                if np.isnan(loss):
+                    self.logger.error(
+                        f"NaN loss detected at epoch {epoch + 1}. Halting."
+                    )
+                    return self.history
+                train_loss += loss
 
             avg_train_loss = train_loss / len(train_loader)
             self.history["train_loss"].append(avg_train_loss)

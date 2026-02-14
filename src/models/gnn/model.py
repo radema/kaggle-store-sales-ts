@@ -77,14 +77,15 @@ class SalesGNN(nn.Module):
         self.total_embedding_dim = 2 * embedding_dim
         input_dim = feature_dim + self.total_embedding_dim
 
-        # Encoder: Extract temporal features per node, then mix spatially
+        # 0. Numerical Stability: Global Norm + Temporal Mix
+        self.input_norm = nn.LayerNorm(input_dim)
         self.encoder_gru = nn.GRU(input_dim, hidden_dim, batch_first=True)
         self.spatial_mixer = GNNLayer(hidden_dim, hidden_dim)
 
         # Decoder: Iterative rollout using temporal GRU + pre-mixed spatial context
         self.decoder_gru = nn.GRUCell(input_dim, hidden_dim)
 
-        self.fc_out = nn.Linear(hidden_dim, 1)
+        self.fc_out = nn.Sequential(nn.Dropout(0.1), nn.Linear(hidden_dim, 1))
 
     def _get_node_embeddings(self, device):
         """Unified node embedding matrix of shape (TotalNodes, 2*E)."""
@@ -116,11 +117,13 @@ class SalesGNN(nn.Module):
         # 0. Cache Node Embeddings
         node_embed = self._get_node_embeddings(device)  # (Nodes, 2E)
 
-        # 1. Encoder: Temporal -> Spatial Mixing
         node_embed_enc = node_embed.view(
             1, num_nodes, 1, self.total_embedding_dim
         ).expand(batch_size, -1, x_enc.size(2), -1)
         x_enc_combined = torch.cat([x_enc, node_embed_enc], dim=-1)
+
+        # Stability: Apply LayerNorm
+        x_enc_combined = self.input_norm(x_enc_combined)
 
         x_enc_flat = x_enc_combined.view(
             -1, x_enc.size(2), self.feature_dim + self.total_embedding_dim
@@ -143,6 +146,10 @@ class SalesGNN(nn.Module):
         for t in range(self.horizon):
             x_t = x_dec[:, :, t, :]
             x_t_combined = torch.cat([x_t, node_embed_dec], dim=-1)
+
+            # Use same norm logic for decoder consistency
+            x_t_combined = self.input_norm(x_t_combined)
+
             x_t_flat = x_t_combined.reshape(
                 -1, self.feature_dim + self.total_embedding_dim
             )
