@@ -73,41 +73,53 @@ class SalesGNN(nn.Module):
         # 5.2 Learnable Adjacency
         self.learnable_adj = LearnableAdjacency(self.num_nodes)
 
-        # Combined input dim
+        # 0. Numerical Stability & Architecture
         self.total_embedding_dim = 2 * embedding_dim
-        input_dim = feature_dim + self.total_embedding_dim
 
-        # 0. Numerical Stability: Global Norm + Temporal Mix
-        self.input_norm = nn.LayerNorm(input_dim)
-        self.encoder_gru = nn.GRU(input_dim, hidden_dim, batch_first=True)
+        # Temporal Encoder: Processes only dynamic features
+        # (Much faster than processing combined features)
+        self.encoder_gru_features = nn.GRU(feature_dim, hidden_dim, batch_first=True)
+
+        # Projection for node embeddings to match hidden_dim
+        self.node_projector = nn.Sequential(
+            nn.Linear(self.total_embedding_dim, hidden_dim), nn.LayerNorm(hidden_dim)
+        )
+
         self.spatial_mixer = GNNLayer(hidden_dim, hidden_dim)
 
-        # Decoder: Iterative rollout using temporal GRU + pre-mixed spatial context
-        self.decoder_gru = nn.GRUCell(input_dim, hidden_dim)
+        # Decoder: processes dynamic features + static context
+        self.decoder_gru = nn.GRU(feature_dim, hidden_dim, batch_first=True)
 
+        self.input_norm = nn.LayerNorm(feature_dim)
         self.fc_out = nn.Sequential(nn.Dropout(0.1), nn.Linear(hidden_dim, 1))
+
+        # Efficiency Caches
+        self._edge_index_cache = {}
 
     def _get_node_embeddings(self, device):
         """Unified node embedding matrix of shape (TotalNodes, 2*E)."""
-        all_stores = self.store_embedding(torch.arange(self.num_stores, device=device))
-        all_families = self.family_embedding(
-            torch.arange(self.num_families, device=device)
+        E = self.embedding_dim
+        # Retrieve weights directly for speed
+        all_stores = self.store_embedding.weight
+        all_families = self.family_embedding.weight
+
+        # Pre-allocate zero padding
+        z_stores = torch.zeros(self.num_stores, E, device=device)
+        z_families = torch.zeros(self.num_families, E, device=device)
+
+        # Series Node Embeddings (S*F, 2E)
+        store_ext = (
+            all_stores.unsqueeze(1).expand(-1, self.num_families, -1).reshape(-1, E)
+        )
+        family_ext = (
+            all_families.unsqueeze(0).expand(self.num_stores, -1, -1).reshape(-1, E)
         )
 
-        # 1. Store Nodes (S, 2E)
-        store_nodes = torch.cat([all_stores, torch.zeros_like(all_stores)], dim=-1)
+        # Build columns efficiently
+        col1 = torch.cat([all_stores, z_families, store_ext], dim=0)
+        col2 = torch.cat([z_stores, all_families, family_ext], dim=0)
 
-        # 2. Family Nodes (F, 2E)
-        family_nodes = torch.cat([torch.zeros_like(all_families), all_families], dim=-1)
-
-        # 3. Series Node Embeddings (S*F, 2E)
-        store_expanded = all_stores.unsqueeze(1).expand(-1, self.num_families, -1)
-        family_expanded = all_families.unsqueeze(0).expand(self.num_stores, -1, -1)
-        series_nodes = torch.cat([store_expanded, family_expanded], dim=-1).reshape(
-            -1, self.total_embedding_dim
-        )
-
-        return torch.cat([store_nodes, family_nodes, series_nodes], dim=0)
+        return torch.cat([col1, col2], dim=-1)
 
     def forward(self, x_enc, x_dec, is_open):
         batch_size = x_enc.size(0)
@@ -115,83 +127,64 @@ class SalesGNN(nn.Module):
         seq_len = x_enc.size(2)
         device = x_enc.device
 
-        # 0. Cache Node Embeddings
-        node_embed = self._get_node_embeddings(device)  # (TotalNodes, 2E)
-
-        # Use embeddings for nodes present in batch
-        node_embed = node_embed[:num_nodes]
-
-        # Optimize Encoder: Concat dynamic features and static embeddings
+        # 1. Temporal Encoder
         # x_enc: (B, N, T, F) -> (B*N, T, F)
         x_enc_flat = x_enc.reshape(-1, seq_len, self.feature_dim)
 
-        # Efficient expansion: (N, 2E) -> (B*N, T, 2E)
-        node_embed_expanded = (
-            node_embed.view(1, num_nodes, 1, self.total_embedding_dim)
-            .expand(batch_size, num_nodes, seq_len, self.total_embedding_dim)
-            .reshape(batch_size * num_nodes, seq_len, self.total_embedding_dim)
+        # MPS Efficiency: Ensure contiguous memory before RNN kernel
+        x_enc_flat = self.input_norm(x_enc_flat).contiguous()
+        _, h_temporal = self.encoder_gru_features(x_enc_flat)
+        h_temporal = h_temporal.view(batch_size, num_nodes, self.hidden_dim)
+
+        # 2. Inject Node Context
+        node_embed_temp = self._get_node_embeddings(device)
+        node_proj = self.node_projector(node_embed_temp[:num_nodes])  # (N, H)
+
+        # Fast Contextualization: Broadcasting addition (B, N, H) + (1, N, H)
+        h_contextualized = (h_temporal + node_proj.unsqueeze(0)).view(
+            -1, self.hidden_dim
         )
+        h_contextualized = h_contextualized.contiguous()
 
-        x_enc_combined = torch.cat([x_enc_flat, node_embed_expanded], dim=-1)
-
-        # Stability: Apply LayerNorm
-        x_enc_combined = self.input_norm(x_enc_combined)
-
-        _, h_temporal = self.encoder_gru(x_enc_combined)
-        h_temporal = h_temporal.squeeze(0)  # (B*N, H)
-
-        # Spatial MIXING: One-shot injection of neighbor context
+        # Spatial MIXING
         edge_index_batch = self._get_batch_edge_index(batch_size, num_nodes, device)
-        h_spatial = self.spatial_mixer(h_temporal, edge_index_batch)  # (B*N, H)
+        h_spatial = self.spatial_mixer(h_contextualized, edge_index_batch)  # (B*N, H)
 
-        # 2. Decoder: State-Space Rollout
-        hidden = h_spatial
-        outputs = []
+        # 3. Decoder: Vectorized Rollout
+        h_decoder_init = h_spatial.unsqueeze(0)
 
-        # Pre-expand node embeddings for decoder rollout: (B*N, 2E)
-        node_embed_dec_flat = (
-            node_embed.view(1, num_nodes, self.total_embedding_dim)
-            .expand(batch_size, num_nodes, self.total_embedding_dim)
-            .reshape(batch_size * num_nodes, self.total_embedding_dim)
-        )
+        x_dec_flat = x_dec.reshape(-1, self.horizon, self.feature_dim)
+        x_dec_flat = self.input_norm(x_dec_flat)
 
-        for t in range(self.horizon):
-            x_t = x_dec[:, :, t, :].reshape(-1, self.feature_dim)  # (B*N, F)
-            x_t_combined = torch.cat([x_t, node_embed_dec_flat], dim=-1)  # (B*N, F+2E)
+        decoder_out, _ = self.decoder_gru(x_dec_flat, h_decoder_init)  # (B*N, Hori, H)
 
-            # Apply LayerNorm
-            x_t_combined = self.input_norm(x_t_combined)
-
-            # Spatial information is preserved in 'hidden' state
-            hidden = self.decoder_gru(x_t_combined, hidden)
-
-            out_t = self.fc_out(hidden).view(batch_size, num_nodes)
-            outputs.append(out_t)
-
-        final_output = torch.stack(outputs, dim=2)
-        final_output = final_output * is_open
+        # Project and Apply to original batch shape
+        proj_out = self.fc_out(decoder_out).view(batch_size, num_nodes, self.horizon)
+        final_output = proj_out * is_open
 
         return final_output
 
     def _get_batch_edge_index(self, batch_size, num_nodes, device):
         """
         Adapts the static edge_index for use with a batch of graphs.
-        PyG treats batches as a single large graph with disconnected components.
+        Caches the result to avoid recomputing offsets every step.
         """
+        cache_key = (batch_size, num_nodes, device.type)
+        if cache_key in self._edge_index_cache:
+            return self._edge_index_cache[cache_key]
+
         if batch_size == 1:
             return self.edge_index
 
         num_edges = self.edge_index.size(1)
-
-        # Edge index: (2, B * NumEdges)
         repeated_edges = self.edge_index.repeat(1, batch_size)
 
-        # Offsets per batch item: [0, ..., 0, N, ..., N, ..., (B-1)N, ..., (B-1)N]
-        # (B, NumEdges) -> flatten
         offsets = torch.arange(batch_size, device=device).view(-1, 1) * num_nodes
-        offsets = offsets.repeat(1, num_edges).view(-1)
+        offsets = offsets.expand(-1, num_edges).reshape(-1)
 
-        return repeated_edges + offsets
+        result = repeated_edges + offsets
+        self._edge_index_cache[cache_key] = result
+        return result
 
     def get_adjacency(self):
         """Returns the learnable adjacency matrix."""

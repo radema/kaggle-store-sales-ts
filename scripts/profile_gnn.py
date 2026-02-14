@@ -41,7 +41,7 @@ def profile():
         num_stores=num_stores,
         num_families=num_families,
         feature_dim=num_features,
-        hidden_dim=64,
+        hidden_dim=32,  # Matching config
         edge_index=edge_index,
         horizon=horizon,
     ).to(device)
@@ -58,64 +58,72 @@ def profile():
     batch = next(iter(loader))
     x_enc, x_dec, y, mask = [t.to(device) for t in batch]
 
-    # x_enc should be (B, N, T, F) after dataset.transpose
-    print(f"Input shapes: x_enc {x_enc.shape}, x_dec {x_dec.shape}")
-
     # Warmup
     for _ in range(3):
         _ = model(x_enc, x_dec, mask)
 
+    # Mixed Precision Info
+    device_type = (
+        "cuda" if "cuda" in str(device) else "mps" if "mps" in str(device) else "cpu"
+    )
+    autocast_enabled = device_type != "cpu"
+
     torch.mps.synchronize() if device.type == "mps" else None
     start = time.time()
     for _ in range(10):
-        _ = model(x_enc, x_dec, mask)
+        with torch.autocast(device_type=device_type, enabled=autocast_enabled):
+            _ = model(x_enc, x_dec, mask)
     torch.mps.synchronize() if device.type == "mps" else None
     print(f"Forward Pass (10 runs): {time.time() - start:.4f}s")
 
     seq_len = x_enc.size(2)
-    node_embed = model._get_node_embeddings(device)
-    embedding_dim = model.total_embedding_dim
 
+    # Component Profiling: Light Encoder
     torch.mps.synchronize() if device.type == "mps" else None
     start = time.time()
     for _ in range(10):
-        x_enc_flat = x_enc.reshape(-1, seq_len, num_features)
-        node_embed_expanded = (
-            node_embed.view(1, num_nodes, 1, embedding_dim)
-            .expand(batch_size, num_nodes, seq_len, embedding_dim)
-            .reshape(batch_size * num_nodes, seq_len, embedding_dim)
-        )
-        x_enc_combined = torch.cat([x_enc_flat, node_embed_expanded], dim=-1)
-        x_enc_combined = model.input_norm(x_enc_combined)
-        _, h_temporal = model.encoder_gru(x_enc_combined)
+        with torch.autocast(device_type=device_type, enabled=autocast_enabled):
+            x_enc_flat = x_enc.reshape(-1, seq_len, num_features)
+            x_enc_flat = model.input_norm(x_enc_flat)
+            _, h_temporal = model.encoder_gru_features(x_enc_flat)
+            h_temporal = h_temporal.squeeze(0)
+
+            # Node projection logic
+            node_embed_temp = model._get_node_embeddings(device)
+            node_proj = model.node_projector(node_embed_temp[:num_nodes])
+            node_proj_expanded = (
+                node_proj.view(1, num_nodes, -1)
+                .expand(batch_size, num_nodes, -1)
+                .reshape(batch_size * num_nodes, -1)
+            )
+            h_context = h_temporal + node_proj_expanded
     torch.mps.synchronize() if device.type == "mps" else None
-    print(f"Encoder GRU Optimized (10 runs): {time.time() - start:.4f}s")
+    print(f"Light Encoder + Context (10 runs): {time.time() - start:.4f}s")
 
     # Component Profiling: Spatial Mixer
-    h_temporal_flat = h_temporal.squeeze(0)
-    edge_index_batch = model._get_batch_edge_index(batch_size, device)
+    edge_index_batch = model._get_batch_edge_index(batch_size, num_nodes, device)
     torch.mps.synchronize() if device.type == "mps" else None
     start = time.time()
     for _ in range(10):
-        _ = model.spatial_mixer(h_temporal_flat, edge_index_batch)
+        with torch.autocast(device_type=device_type, enabled=autocast_enabled):
+            _ = model.spatial_mixer(h_context, edge_index_batch)
     torch.mps.synchronize() if device.type == "mps" else None
     print(f"Spatial Mixer GATv2 (10 runs): {time.time() - start:.4f}s")
 
-    # Component Profiling: Decoder Rollout
-    h_spatial = h_temporal_flat
+    # Component Profiling: Vectorized Decoder
     torch.mps.synchronize() if device.type == "mps" else None
     start = time.time()
     for _ in range(10):
-        hidden = h_spatial
-        node_embed_dec_flat = node_embed.repeat(batch_size, 1)
-        for t in range(horizon):
-            x_t = x_dec[:, :, t, :].reshape(-1, num_features)
-            x_t_combined = torch.cat([x_t, node_embed_dec_flat], dim=-1)
-            x_t_combined = model.input_norm(x_t_combined)
-            hidden = model.decoder_gru(x_t_combined, hidden)
-            _ = model.fc_out(hidden)
+        with torch.autocast(device_type=device_type, enabled=autocast_enabled):
+            h_decoder_init = h_context.unsqueeze(0)
+            x_dec_flat = x_dec.reshape(-1, horizon, num_features)
+            x_dec_flat = model.input_norm(x_dec_flat)
+            decoder_out, _ = model.decoder_gru(x_dec_flat, h_decoder_init)
+            node_proj_dec = node_proj_expanded.unsqueeze(1)
+            final_context = decoder_out + node_proj_dec
+            _ = model.fc_out(final_context)
     torch.mps.synchronize() if device.type == "mps" else None
-    print(f"Decoder Rollout Optimized (10 runs): {time.time() - start:.4f}s")
+    print(f"Vectorized Decoder (10 runs): {time.time() - start:.4f}s")
 
 
 if __name__ == "__main__":

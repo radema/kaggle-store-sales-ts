@@ -54,7 +54,7 @@ class GNNTrainer:
         self.history = {"train_loss": [], "val_loss": []}
 
     def train_step(self, x_enc, x_dec, y, mask):
-        """Single optimization step."""
+        """Single optimization step with Mixed Precision support."""
         self.model.train()
         self.optimizer.zero_grad()
 
@@ -63,9 +63,13 @@ class GNNTrainer:
         y = y.to(self.device)
         mask = mask.to(self.device)
 
-        y_pred = self.model(x_enc, x_dec, mask)
+        # Autocast disabled for MPS due to numerical instability with GRUs
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_autocast = device_type == "cuda"
 
-        loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
+        with torch.autocast(device_type=device_type, enabled=use_autocast):
+            y_pred = self.model(x_enc, x_dec, mask)
+            loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
         if torch.isnan(loss):
             self.logger.error("Loss is NaN during train step!")
@@ -83,14 +87,18 @@ class GNNTrainer:
     def val_step(self, x_enc, x_dec, y, mask):
         """Single validation step."""
         self.model.eval()
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_autocast = device_type == "cuda"
+
         with torch.no_grad():
             x_enc = x_enc.to(self.device)
             x_dec = x_dec.to(self.device)
             y = y.to(self.device)
             mask = mask.to(self.device)
 
-            y_pred = self.model(x_enc, x_dec, mask)
-            loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
+            with torch.autocast(device_type=device_type, enabled=use_autocast):
+                y_pred = self.model(x_enc, x_dec, mask)
+                loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
         return loss.item()
 
@@ -154,6 +162,8 @@ class GNNTrainer:
         """Generates predictions for the entire loader."""
         self.model.eval()
         all_preds = []
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_autocast = device_type == "cuda"
 
         with torch.no_grad():
             for batch in loader:
@@ -162,7 +172,8 @@ class GNNTrainer:
                 x_dec = x_dec.to(self.device)
                 mask = mask.to(self.device)
 
-                y_pred = self.model(x_enc, x_dec, mask)
+                with torch.autocast(device_type=device_type, enabled=use_autocast):
+                    y_pred = self.model(x_enc, x_dec, mask)
                 all_preds.append(y_pred.cpu())
 
         return torch.cat(all_preds, dim=0)

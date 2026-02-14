@@ -123,24 +123,19 @@ def main(config_path, dev_mode=False):
         horizon=horizon,
     )
 
-    # Performance: Use num_workers and pin_memory (if not on MPS/CPU only)
-    # Note: On Mac MPS, pin_memory can sometimes be problematic, but usually fine
-    num_workers = 4 if not dev_mode else 0
+    # Performance: On MPS, num_workers=0 is often faster for large tensors
+    # to avoid IPC serialization overhead.
+    num_workers = 0
 
     train_loader = DataLoader(
         train_dataset,
         batch_size=config["training"]["batch_size"],
         shuffle=True,
         num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=(num_workers > 0),
+        pin_memory=False,
     )
     val_loader = DataLoader(
-        val_dataset,
-        batch_size=1,
-        num_workers=num_workers,
-        pin_memory=True,
-        persistent_workers=(num_workers > 0),
+        val_dataset, batch_size=1, num_workers=num_workers, pin_memory=False
     )
 
     logger.info(f"Train batches: {len(train_loader)} (Samples: {len(train_dataset)})")
