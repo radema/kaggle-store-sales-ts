@@ -44,25 +44,34 @@ class SalesGNN(nn.Module):
     - Hard Gating for closed stores
     """
 
-    def __init__(self, num_nodes, feature_dim, hidden_dim, edge_index, horizon):
+    def __init__(
+        self, num_nodes, feature_dim, hidden_dim, edge_index, horizon, embedding_dim=16
+    ):
         super().__init__()
         self.num_nodes = num_nodes
         self.feature_dim = feature_dim
         self.hidden_dim = hidden_dim
         self.horizon = horizon
+        self.embedding_dim = embedding_dim
 
         # Buffer for static graph structure
         self.register_buffer("edge_index", edge_index)
 
+        # Node Embeddings: Learnable signature for each node (Store, Family, Series)
+        self.node_embedding = nn.Embedding(num_nodes, embedding_dim)
+
         # Task 5.2: Learnable Adjacency
         self.learnable_adj = LearnableAdjacency(num_nodes)
 
+        # Combined input dim: shared features + static identity embedding
+        input_dim = feature_dim + embedding_dim
+
         # Encoder: Extract temporal features per node, then mix spatially
-        self.encoder_gru = nn.GRU(feature_dim, hidden_dim, batch_first=True)
+        self.encoder_gru = nn.GRU(input_dim, hidden_dim, batch_first=True)
         self.encoder_gnn = GNNLayer(hidden_dim, hidden_dim)
 
         # Decoder: Step-by-step prediction
-        self.decoder_gru = nn.GRUCell(feature_dim, hidden_dim)
+        self.decoder_gru = nn.GRUCell(input_dim, hidden_dim)
         self.decoder_gnn = GNNLayer(hidden_dim, hidden_dim)
 
         self.fc_out = nn.Linear(hidden_dim, 1)
@@ -80,12 +89,27 @@ class SalesGNN(nn.Module):
             torch.Tensor: (Batch, Nodes, T_out) - Predictions
         """
         batch_size = x_enc.size(0)
+        num_nodes = x_enc.size(1)
         device = x_enc.device
 
+        # 0. Prepare Node Embeddings
+        # Shape: (Nodes, E) -> expand to (Batch, Nodes, T, E)
+        node_ids = torch.arange(num_nodes, device=device)
+        node_embed = self.node_embedding(node_ids)  # (Nodes, E)
+
         # 1. Temporal Encoding
+        # Expand node embeddings for encoder history (Batch, Nodes, T_in, E)
+        node_embed_enc = node_embed.view(1, num_nodes, 1, self.embedding_dim)
+        node_embed_enc = node_embed_enc.expand(batch_size, -1, x_enc.size(2), -1)
+
+        # Concat features and embeddings: (B, N, T_in, F+E)
+        x_enc_combined = torch.cat([x_enc, node_embed_enc], dim=-1)
+
         # Process all nodes across the batch efficiently
-        # Shape: (B * N, T_in, F)
-        x_enc_flat = x_enc.view(-1, x_enc.size(2), self.feature_dim)
+        # Shape: (B * N, T_in, F+E)
+        x_enc_flat = x_enc_combined.view(
+            -1, x_enc.size(2), self.feature_dim + self.embedding_dim
+        )
         _, h_temporal = self.encoder_gru(x_enc_flat)
         h_temporal = h_temporal.squeeze(0)  # (B * N, H)
 
@@ -98,11 +122,19 @@ class SalesGNN(nn.Module):
         outputs = []
 
         # 3. Recurrent Decoding
+        # Prepare expanded embeddings for decoder (Batch, Nodes, E)
+        node_embed_dec = node_embed.view(1, num_nodes, self.embedding_dim)
+        node_embed_dec = node_embed_dec.expand(batch_size, -1, -1)
+
         for t in range(self.horizon):
-            # Future known features at time t
-            # Shape: (B, N, F)
+            # Future known features at time t (B, N, F)
             x_t = x_dec[:, :, t, :]
-            x_t_flat = x_t.reshape(-1, self.feature_dim)  # (B * N, F)
+
+            # Combine with embeddings (B, N, F+E)
+            x_t_combined = torch.cat([x_t, node_embed_dec], dim=-1)
+            x_t_flat = x_t_combined.reshape(
+                -1, self.feature_dim + self.embedding_dim
+            )  # (B * N, F+E)
 
             # Temporal update
             hidden = self.decoder_gru(x_t_flat, hidden)
