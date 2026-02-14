@@ -13,7 +13,7 @@ training:
   val_days: 16 # Use last horizon days for validation
 
 data:
-  train_start: "2013-01-01" # Full history
+  train_start: "2017-01-01" # Full history
   features:
     - "onpromotion"
     - "dcoilwtico"

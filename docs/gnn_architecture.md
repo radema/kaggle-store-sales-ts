@@ -23,18 +23,97 @@ The GNN module is designed to be decoupled from the standard tabular pipelines w
 - `scripts/`: Entry points for caching and training.
 - `configs/gnn.yaml`: Hyperparameters and feature definitions.
 
-## 2. Chosen GNN Architecture: Seq2Seq ST-GNN
+## 2. GNN Architecture Diagrams
 
-The model is a **Sequence-to-Sequence Spatio-Temporal Graph Neural Network**. Unlike standard regressions, it processes all entities as nodes in a graph to capture cross-series correlations.
+### High-Level Data Flow
+```mermaid
+graph TD
+    subgraph Input_Data
+        Tabular[train.parquet / test.parquet]
+        Stores[stores.csv]
+    end
+
+    subgraph Preprocessing
+        BuildCache[scripts/build_gnn_dataset.py]
+        Cache[(data/processed/gnn/)]
+        Adj[src/models/gnn/graph.py]
+    end
+
+    subgraph Training_Pipeline
+        Loader[SalesGNNDataset]
+        Model[SalesGNN]
+        Trainer[GNNTrainer]
+    end
+
+    Tabular --> BuildCache
+    BuildCache --> Cache
+    Cache --> Loader
+    Stores --> Adj
+    Adj --> Model
+    Loader --> Trainer
+    Model --> Trainer
+    Trainer --> Artifacts[artifacts/gnn/]
+```
+
+### Neural Network Architecture (SalesGNN - Optimized)
+```mermaid
+graph LR
+    subgraph Inputs
+        X_enc[x_enc History: B, N, T_in, F]
+        X_dec[x_dec Future: B, N, T_out, F]
+        Mask[is_open Mask: B, N, T_out]
+    end
+
+    subgraph Hierarchical_Embeddings
+        StoreIDs[Store IDs: 0...53]
+        FamilyIDs[Family IDs: 0...32]
+        StoreEmbed[Learnable Store: 54 x 16]
+        FamilyEmbed[Learnable Family: 33 x 16]
+        
+        StoreIDs --> StoreEmbed
+        FamilyIDs --> FamilyEmbed
+    end
+
+    subgraph Encoder_30_Days_HighSpeed
+        ConcatEnc[Concat Features + [Store_i, Family_j]]
+        GRU_Enc[GRU: Temporal Context]
+        GAT_Mix[GATv2: One-shot Spatial Mix]
+        X_enc --> ConcatEnc
+        StoreEmbed --> ConcatEnc
+        FamilyEmbed --> ConcatEnc
+        ConcatEnc --> GRU_Enc
+        GRU_Enc --> GAT_Mix
+    end
+
+    subgraph Decoder_State_Space_Rollout
+        ConcatDec[Concat Future + [Store_i, Family_j]]
+        GRU_Cell[GRUCell: State Update]
+        FC[Linear Output Layer]
+        
+        GAT_Mix --> GRU_Cell
+        X_dec --> ConcatDec
+        StoreEmbed --> ConcatDec
+        FamilyEmbed --> ConcatDec
+        ConcatDec --> GRU_Cell
+        GRU_Cell --> FC
+    end
+
+    FC --> Gating[Hard Gating: Preds * Mask]
+    Mask --> Gating
+    Gating --> Output[Final Sales: B, N, T_out]
+```
+
+## 3. Chosen GNN Architecture: Decoupled ST-GNN
+
+The model is a **Sequence-to-Sequence Spatio-Temporal Graph Neural Network** optimized for high-performance training on GPU/MPS backends.
 
 ### Key Components
-- **Learnable Node Embeddings**: Every node (Store, Family, Series) has a unique 16-dimensional identity vector. This allows the model to learn individual biases (e.g., "Store 1 is high volume").
-- **Temporal Encoder (GRU)**: Processes the 30-day history per node to extract dynamic temporal states.
-- **Spatial Mixer (GATv2)**: Uses Graph Attention (GATv2) to allow nodes to "share" information with neighbors (e.g., a "Bakery" node learns from other "Bakery" nodes).
-- **Seq2Seq Decoder**: Uses a GRUCell to predict 16 days ahead, injecting future known features (promotions, oil prices, calendar) at each step.
-- **Hard Gating**: A final custom layer that forces predictions to zero if the `is_closed` mask is active for a specific store/day.
+- **Hierarchical Node Embeddings**: Instead of individual embeddings per series, we learn vectors for **Stores (54)** and **Families (33)**. Series identity is dynamically constructed by concatenating these two, significantly reducing parameter count and speeding up convergence.
+- **Decoupled Spatial Mixing**: To avoid the overhead of sequential GNN passes, the model applies **Graph Attention (GATv2)** once at the "neck" of the encoder. This injects neighbor context into the temporal states, which the GRU then propagates through the forecast horizon.
+- **State-Space Decoder**: A GRUCell manages the 16-day rollout. By carrying the spatially-augmented state from the encoder, it maintains "spatial awareness" without needing a GNN call at every timestep.
+- **Hard Gating**: A final custom layer that forces predictions to zero if the `is_closed` mask is active, preserving business logic integrity.
 
-## 3. Chosen Graph Model
+## 4. Chosen Graph Model
 
 We use a **Heterogeneous-to-Homogeneous Unified Graph**. To simplify computation, we represent all entities as nodes in a shared index.
 

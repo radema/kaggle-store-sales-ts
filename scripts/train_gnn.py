@@ -117,9 +117,9 @@ def main(config_path, dev_mode=False):
     logger.info(f"Val batches: {len(val_loader)} (Samples: {len(val_dataset)})")
 
     # 5. Initialize Model
-    total_nodes = full_dataset.features.size(0)
     model = SalesGNN(
-        num_nodes=total_nodes,
+        num_stores=num_stores,
+        num_families=num_families,
         feature_dim=len(feature_cols),
         hidden_dim=config["model"]["hidden_dim"],
         edge_index=edge_index,
