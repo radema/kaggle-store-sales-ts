@@ -128,8 +128,8 @@ class SalesGNN(nn.Module):
         # Efficient expansion: (N, 2E) -> (B*N, T, 2E)
         node_embed_expanded = (
             node_embed.view(1, num_nodes, 1, self.total_embedding_dim)
-            .expand(batch_size, -1, seq_len, -1)
-            .reshape(-1, seq_len, self.total_embedding_dim)
+            .expand(batch_size, num_nodes, seq_len, self.total_embedding_dim)
+            .reshape(batch_size * num_nodes, seq_len, self.total_embedding_dim)
         )
 
         x_enc_combined = torch.cat([x_enc_flat, node_embed_expanded], dim=-1)
@@ -141,7 +141,7 @@ class SalesGNN(nn.Module):
         h_temporal = h_temporal.squeeze(0)  # (B*N, H)
 
         # Spatial MIXING: One-shot injection of neighbor context
-        edge_index_batch = self._get_batch_edge_index(batch_size, device)
+        edge_index_batch = self._get_batch_edge_index(batch_size, num_nodes, device)
         h_spatial = self.spatial_mixer(h_temporal, edge_index_batch)  # (B*N, H)
 
         # 2. Decoder: State-Space Rollout
@@ -151,8 +151,8 @@ class SalesGNN(nn.Module):
         # Pre-expand node embeddings for decoder rollout: (B*N, 2E)
         node_embed_dec_flat = (
             node_embed.view(1, num_nodes, self.total_embedding_dim)
-            .expand(batch_size, -1, -1)
-            .reshape(-1, self.total_embedding_dim)
+            .expand(batch_size, num_nodes, self.total_embedding_dim)
+            .reshape(batch_size * num_nodes, self.total_embedding_dim)
         )
 
         for t in range(self.horizon):
@@ -165,7 +165,7 @@ class SalesGNN(nn.Module):
             # Spatial information is preserved in 'hidden' state
             hidden = self.decoder_gru(x_t_combined, hidden)
 
-            out_t = self.fc_out(hidden).view(batch_size, self.num_nodes)
+            out_t = self.fc_out(hidden).view(batch_size, num_nodes)
             outputs.append(out_t)
 
         final_output = torch.stack(outputs, dim=2)
@@ -173,7 +173,7 @@ class SalesGNN(nn.Module):
 
         return final_output
 
-    def _get_batch_edge_index(self, batch_size, device):
+    def _get_batch_edge_index(self, batch_size, num_nodes, device):
         """
         Adapts the static edge_index for use with a batch of graphs.
         PyG treats batches as a single large graph with disconnected components.
@@ -188,7 +188,7 @@ class SalesGNN(nn.Module):
 
         # Offsets per batch item: [0, ..., 0, N, ..., N, ..., (B-1)N, ..., (B-1)N]
         # (B, NumEdges) -> flatten
-        offsets = torch.arange(batch_size, device=device).view(-1, 1) * self.num_nodes
+        offsets = torch.arange(batch_size, device=device).view(-1, 1) * num_nodes
         offsets = offsets.repeat(1, num_edges).view(-1)
 
         return repeated_edges + offsets

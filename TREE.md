@@ -8,7 +8,8 @@
 .
 ├── .bolts/                  # Task-specific documentation (Specs, ADRs, MRPs)
 │   ├── baseline-rearchitecture/ # Bolt #9: Gated Hybrid Baseline
-│   └── gnn-design/              # Bolt #10: ST-GNN Implementation
+│   ├── gnn-design/              # Bolt #10: ST-GNN Implementation
+│   └── gnn-optimization/        # Bolt #11: Performance Speedup
 ├── artifacts/               # Model outputs, metrics, and submissions (GitIgnored)
 │   └── baseline/            # Current baseline OOFs and Submissions
 ├── configs/                 # YAML pipeline definitions

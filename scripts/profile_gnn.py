@@ -82,8 +82,8 @@ def profile():
         x_enc_flat = x_enc.reshape(-1, seq_len, num_features)
         node_embed_expanded = (
             node_embed.view(1, num_nodes, 1, embedding_dim)
-            .expand(batch_size, -1, seq_len, -1)
-            .reshape(-1, seq_len, embedding_dim)
+            .expand(batch_size, num_nodes, seq_len, embedding_dim)
+            .reshape(batch_size * num_nodes, seq_len, embedding_dim)
         )
         x_enc_combined = torch.cat([x_enc_flat, node_embed_expanded], dim=-1)
         x_enc_combined = model.input_norm(x_enc_combined)

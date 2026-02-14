@@ -97,7 +97,8 @@ def main(config_path, dev_mode=False):
     logger.info("Data integrity verified (Internal imputation applied).")
 
     # Time split: Robust slicing relative to the ACTUAL cache size
-    num_cache_steps = full_dataset.features.shape[1]
+    # New T-major layout: (Time, Nodes, Features)
+    num_cache_steps = full_dataset.features.shape[0]
     train_limit_idx = num_cache_steps - val_days
 
     logger.info(f"Cache time steps: {num_cache_steps}. Val days: {val_days}")
@@ -105,27 +106,42 @@ def main(config_path, dev_mode=False):
         f"Slicing cache: Train until {train_limit_idx}, Val from {train_limit_idx - window}"
     )
 
-    # Manual slicing for train/val
+    # Manual slicing for train/val - T-major indexing
     train_dataset = SalesGNNDataset(
-        features=full_dataset.features[:, :train_limit_idx, :],
-        labels=full_dataset.labels[:, :train_limit_idx],
-        is_open=full_dataset.is_open[:, :train_limit_idx],
+        features=full_dataset.features[:train_limit_idx, :, :],
+        labels=full_dataset.labels[:train_limit_idx, :],
+        is_open=full_dataset.is_open[:train_limit_idx, :],
         window=window,
         horizon=horizon,
     )
 
     val_dataset = SalesGNNDataset(
-        features=full_dataset.features[:, train_limit_idx - window :, :],
-        labels=full_dataset.labels[:, train_limit_idx - window :],
-        is_open=full_dataset.is_open[:, train_limit_idx - window :],
+        features=full_dataset.features[train_limit_idx - window :, :, :],
+        labels=full_dataset.labels[train_limit_idx - window :, :],
+        is_open=full_dataset.is_open[train_limit_idx - window :, :],
         window=window,
         horizon=horizon,
     )
 
+    # Performance: Use num_workers and pin_memory (if not on MPS/CPU only)
+    # Note: On Mac MPS, pin_memory can sometimes be problematic, but usually fine
+    num_workers = 4 if not dev_mode else 0
+
     train_loader = DataLoader(
-        train_dataset, batch_size=config["training"]["batch_size"], shuffle=True
+        train_dataset,
+        batch_size=config["training"]["batch_size"],
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=(num_workers > 0),
     )
-    val_loader = DataLoader(val_dataset, batch_size=1)
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=1,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=(num_workers > 0),
+    )
 
     logger.info(f"Train batches: {len(train_loader)} (Samples: {len(train_dataset)})")
     logger.info(f"Val batches: {len(val_loader)} (Samples: {len(val_dataset)})")
