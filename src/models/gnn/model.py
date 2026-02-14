@@ -112,23 +112,27 @@ class SalesGNN(nn.Module):
     def forward(self, x_enc, x_dec, is_open):
         batch_size = x_enc.size(0)
         num_nodes = x_enc.size(1)
+        seq_len = x_enc.size(2)
         device = x_enc.device
 
         # 0. Cache Node Embeddings
         node_embed = self._get_node_embeddings(device)  # (Nodes, 2E)
 
-        node_embed_enc = node_embed.view(
-            1, num_nodes, 1, self.total_embedding_dim
-        ).expand(batch_size, -1, x_enc.size(2), -1)
-        x_enc_combined = torch.cat([x_enc, node_embed_enc], dim=-1)
+        # Optimize Encoder: Concat dynamic features and static embeddings
+        # x_enc: (B, N, T, F) -> (B*N, T, F)
+        x_enc_flat = x_enc.reshape(-1, seq_len, self.feature_dim)
+
+        # Expand static embeddings to match (B*N, T, 2E)
+        node_embed_expanded = (
+            node_embed.repeat(batch_size, 1).unsqueeze(1).expand(-1, seq_len, -1)
+        )
+
+        x_enc_combined = torch.cat([x_enc_flat, node_embed_expanded], dim=-1)
 
         # Stability: Apply LayerNorm
         x_enc_combined = self.input_norm(x_enc_combined)
 
-        x_enc_flat = x_enc_combined.view(
-            -1, x_enc.size(2), self.feature_dim + self.total_embedding_dim
-        )
-        _, h_temporal = self.encoder_gru(x_enc_flat)
+        _, h_temporal = self.encoder_gru(x_enc_combined)
         h_temporal = h_temporal.squeeze(0)  # (B*N, H)
 
         # Spatial MIXING: One-shot injection of neighbor context
@@ -139,23 +143,18 @@ class SalesGNN(nn.Module):
         hidden = h_spatial
         outputs = []
 
-        node_embed_dec = node_embed.view(1, num_nodes, self.total_embedding_dim).expand(
-            batch_size, -1, -1
-        )
+        # Pre-expand node embeddings for decoder rollout
+        node_embed_dec_flat = node_embed.repeat(batch_size, 1)  # (B*N, 2E)
 
         for t in range(self.horizon):
-            x_t = x_dec[:, :, t, :]
-            x_t_combined = torch.cat([x_t, node_embed_dec], dim=-1)
+            x_t = x_dec[:, :, t, :].reshape(-1, self.feature_dim)  # (B*N, F)
+            x_t_combined = torch.cat([x_t, node_embed_dec_flat], dim=-1)  # (B*N, F+2E)
 
-            # Use same norm logic for decoder consistency
+            # Apply LayerNorm
             x_t_combined = self.input_norm(x_t_combined)
 
-            x_t_flat = x_t_combined.reshape(
-                -1, self.feature_dim + self.total_embedding_dim
-            )
-
             # Spatial information is preserved in 'hidden' state
-            hidden = self.decoder_gru(x_t_flat, hidden)
+            hidden = self.decoder_gru(x_t_combined, hidden)
 
             out_t = self.fc_out(hidden).view(batch_size, self.num_nodes)
             outputs.append(out_t)

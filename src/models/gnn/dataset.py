@@ -13,9 +13,9 @@ class SalesGNNDataset(Dataset):
     def __init__(self, features, labels, is_open, window, horizon):
         """
         Args:
-            features: np.array or torch.Tensor of shape (Nodes, Time, Features)
-            labels: np.array or torch.Tensor of shape (Nodes, Time)
-            is_open: np.array or torch.Tensor of shape (Nodes, Time)
+            features: np.array or torch.Tensor of shape (Time, Nodes, Features)
+            labels: np.array or torch.Tensor of shape (Time, Nodes)
+            is_open: np.array or torch.Tensor of shape (Time, Nodes)
             window: int, input sequence length (T_in)
             horizon: int, forecast horizon (T_out)
         """
@@ -39,7 +39,8 @@ class SalesGNNDataset(Dataset):
         self.horizon = horizon
 
         # Calculate valid starting indices for windows
-        self.num_time_steps = self.features.shape[1]
+        # Current layout: (Time, Nodes, ...)
+        self.num_time_steps = self.features.shape[0]
         self.num_samples = self.num_time_steps - window - horizon + 1
 
         if self.num_samples <= 0:
@@ -55,19 +56,26 @@ class SalesGNNDataset(Dataset):
         enc_end = idx + self.window
         dec_end = enc_end + self.horizon
 
-        # History (Encoder)
-        x_enc = self.features[:, idx:enc_end, :]
+        # History (Encoder): (Window, Nodes, Features)
+        x_enc = self.features[idx:enc_end, :, :]
 
-        # Future (Decoder) - contains only features known in advance
-        x_dec = self.features[:, enc_end:dec_end, :]
+        # Future (Decoder): (Horizon, Nodes, Features)
+        x_dec = self.features[enc_end:dec_end, :, :]
 
-        # Target
-        y = self.labels[:, enc_end:dec_end]
+        # Target: (Horizon, Nodes)
+        y = self.labels[enc_end:dec_end, :]
 
-        # Hard Gating Mask
-        mask = self.is_open[:, enc_end:dec_end]
+        # Hard Gating Mask: (Horizon, Nodes)
+        mask = self.is_open[enc_end:dec_end, :]
 
-        return x_enc, x_dec, y, mask
+        # Transpose to (Nodes, Time, ...) for model compatibility or handle in model
+        # To avoid breaking model, we transpose here for now, but better to handle in model
+        return (
+            x_enc.transpose(0, 1),
+            x_dec.transpose(0, 1),
+            y.transpose(0, 1),
+            mask.transpose(0, 1),
+        )
 
     def save_to_cache(self, directory):
         """Saves current tensors to a directory for later loading."""
@@ -95,6 +103,7 @@ class SalesGNNDataset(Dataset):
         """
         Helper to construct the 3D tensors from a flat DataFrame.
         Ordering: Stores -> Families -> Series (Store-Family)
+        Layout: (Time, Nodes, Features)
         """
         num_stores = len(stores_df)
         num_families = len(families)
@@ -107,13 +116,14 @@ class SalesGNNDataset(Dataset):
 
         num_features = len(feature_cols)
 
+        # New T-major layout: (Time, Nodes, Features)
         features_arr = np.zeros(
-            (total_nodes, num_time_steps, num_features), dtype=np.float32
+            (num_time_steps, total_nodes, num_features), dtype=np.float32
         )
-        labels_arr = np.zeros((total_nodes, num_time_steps), dtype=np.float32)
+        labels_arr = np.zeros((num_time_steps, total_nodes), dtype=np.float32)
         is_open_arr = np.ones(
-            (total_nodes, num_time_steps), dtype=np.float32
-        )  # Default open for aggregators
+            (num_time_steps, total_nodes), dtype=np.float32
+        )  # Default open
 
         # Series Mapping
         store_map = {nbr: i for i, nbr in enumerate(stores_df["store_nbr"])}
@@ -121,7 +131,6 @@ class SalesGNNDataset(Dataset):
         series_offset = num_stores + num_families
 
         # Fill Series Data
-        # We assume df is already sorted or we handle it via date mapping
         for (s_nbr, f_name), group in df.groupby(["store_nbr", "family"]):
             if s_nbr not in store_map or f_name not in family_map:
                 continue
@@ -131,8 +140,9 @@ class SalesGNNDataset(Dataset):
             node_idx = series_offset + (s_idx * num_families) + f_idx
 
             t_indices = [date_to_idx[d] for d in group["date"]]
-            labels_arr[node_idx, t_indices] = group["log1p_sales"].fillna(0).values
-            is_open_arr[node_idx, t_indices] = (group["is_closed"] == 0).astype(int)
-            features_arr[node_idx, t_indices, :] = group[feature_cols].fillna(0).values
+            # Note the indexing swap [t, node]
+            labels_arr[t_indices, node_idx] = group["log1p_sales"].fillna(0).values
+            is_open_arr[t_indices, node_idx] = (group["is_closed"] == 0).astype(int)
+            features_arr[t_indices, node_idx, :] = group[feature_cols].fillna(0).values
 
         return SalesGNNDataset(features_arr, labels_arr, is_open_arr, window, horizon)
