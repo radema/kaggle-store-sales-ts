@@ -89,19 +89,22 @@ class FactoredGCN(nn.Module):
 
     def get_adjs(self) -> List[torch.Tensor]:
         # Spatial Adj
-        adj_s = torch.matmul(self.e1_s, self.e2_s.t())
-        # Add identity bias (plus epsilon) for stability
+        # e1 @ e2.t can have large values, tanh keeps it in (-1, 1)
+        # ReLU then keeps it in (0, 1)
+        adj_s = F.relu(torch.tanh(torch.matmul(self.e1_s, self.e2_s.t())))
+        # Add identity bias AFTER ReLU to ensure strong diagonal gradient flow
         adj_s = adj_s + torch.eye(self.S, device=adj_s.device) * self.eps
-        adj_s = F.relu(torch.tanh(adj_s))
         
         # Family Adj
-        adj_f = torch.matmul(self.e1_f, self.e2_f.t())
+        adj_f = F.relu(torch.tanh(torch.matmul(self.e1_f, self.e2_f.t())))
         adj_f = adj_f + torch.eye(self.F, device=adj_f.device) * self.eps
-        adj_f = F.relu(torch.tanh(adj_f))
         
-        # Row-normalize
-        adj_s = adj_s / (adj_s.sum(dim=-1, keepdim=True) + 1e-6)
-        adj_f = adj_f / (adj_f.sum(dim=-1, keepdim=True) + 1e-6)
+        # Row-normalize with robust denominator
+        sum_s = adj_s.sum(dim=-1, keepdim=True)
+        adj_s = adj_s / (sum_s + 1e-4) # Higher epsilon for stability
+        
+        sum_f = adj_f.sum(dim=-1, keepdim=True)
+        adj_f = adj_f / (sum_f + 1e-4)
         
         return [adj_s, adj_f]
 
@@ -201,9 +204,22 @@ class SalesGNN(nn.Module):
 
     def forward(self, x_enc: torch.Tensor, is_open: Optional[torch.Tensor] = None) -> torch.Tensor:
         """
-        x_enc: (Batch, N_series, Time, Features)
-        is_open: (Batch, N_series, Time)
+        x_enc: (Batch, N_nodes, Time, Features)
+        is_open: (Batch, N_nodes, Time)
         """
+        # B, N, T, F
+        B, N, T, F = x_enc.shape
+        N_series = self.num_stores * self.num_families
+        
+        # Smart Slicing: If input has hub nodes (e.g. from legacy cache), slice them out
+        if N > N_series:
+            offset = N - N_series
+            x_enc = x_enc[:, offset:, :, :]
+        
+        if is_open is not None and is_open.shape[1] > N_series:
+            offset = is_open.shape[1] - N_series
+            is_open = is_open[:, offset:, :]
+
         # Layout: (B, N, T, F) -> (B, F, N, T)
         x = x_enc.permute(0, 3, 1, 2).contiguous()
         
@@ -214,7 +230,12 @@ class SalesGNN(nn.Module):
         x = self.input_proj(x)
         
         # 3. Reshape to 5D Grid: (B, C, S, F, T)
+        # Verify shape before view to avoid cryptic errors
         B, C, _, T = x.shape
+        if x.shape[2] != N_series:
+            raise ValueError(f"Feature projection node count {x.shape[2]} does not match S*F product {N_series}. "
+                             f"Did slicing fail? Input N: {N}")
+        
         x = x.view(B, C, self.num_stores, self.num_families, T)
 
         skip_total = 0

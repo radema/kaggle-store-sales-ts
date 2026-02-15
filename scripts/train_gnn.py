@@ -234,9 +234,8 @@ def main(config_path, dev_mode=False):
 
     # Invert log transform: exp(x) - 1
     # We only care about the Series nodes (Store-Family pairs)
-    # Recall node indexing: [Stores, Families, Series]
-    series_offset = num_stores + num_families
-    series_preds_log = preds_log[0, series_offset:, :]  # (NumSeries, Horizon)
+    # The SalesGNN model now returns ONLY series nodes by default, so we don't slice.
+    series_preds_log = preds_log[0, :, :]  # (NumSeries, Horizon)
 
     # Flatten to match test_df order (Date then Store then Family)
     # The dataset was built using groupby(["store_nbr", "family"]) which matches our node order

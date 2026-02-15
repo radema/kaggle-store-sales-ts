@@ -75,6 +75,14 @@ class GNNTrainer:
         y = y.to(self.device)
         mask = mask.to(self.device)
 
+        # Ensure targets and masks only contain series nodes to match model output
+        # (This handles datasets that still include hub nodes)
+        N_series = self.model.num_stores * self.model.num_families
+        if y.shape[1] > N_series:
+            offset = y.shape[1] - N_series
+            y = y[:, offset:, :].contiguous()
+            mask = mask[:, offset:, :].contiguous()
+
         # Autocast strategy
         device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
         use_autocast = device_type in ["cuda", "mps"]
@@ -108,6 +116,13 @@ class GNNTrainer:
             x_enc = x_enc.to(self.device).contiguous()
             y = y.to(self.device)
             mask = mask.to(self.device)
+
+            # Ensure targets and masks only contain series nodes
+            N_series = self.model.num_stores * self.model.num_families
+            if y.shape[1] > N_series:
+                offset = y.shape[1] - N_series
+                y = y[:, offset:, :].contiguous()
+                mask = mask[:, offset:, :].contiguous()
 
             with torch.autocast(device_type=device_type, enabled=use_autocast):
                 y_pred = self.model(x_enc, is_open=mask)
