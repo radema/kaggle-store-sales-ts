@@ -90,16 +90,25 @@ class SalesGNNDataset(Dataset):
         return cls(features, labels, is_open, window, horizon)
 
     @staticmethod
-    def from_df(df, stores_df, families, feature_cols, window, horizon):
+    def from_df(df, stores_df, families, feature_cols, window, horizon, use_hub_nodes=False):
         """
         Helper to construct the 3D tensors from a flat DataFrame.
-        Ordering: Stores -> Families -> Series (Store-Family)
+        Ordering: Lexical Sort of Stores -> Families.
         Layout: (Time, Nodes, Features)
         """
-        num_stores = len(stores_df)
-        num_families = len(families)
+        from sklearn.preprocessing import StandardScaler
+
+        # 1. Lexical Sorting for alignment with submission logic
+        stores_sorted = stores_df.sort_values("store_nbr")
+        families_sorted = sorted(families)
+        
+        num_stores = len(stores_sorted)
+        num_families = len(families_sorted)
         num_series = num_stores * num_families
-        total_nodes = num_stores + num_families + num_series
+        
+        # Hub nodes (summary nodes) are now optional to eliminate MPS bottlenecks
+        series_offset = (num_stores + num_families) if use_hub_nodes else 0
+        total_nodes = series_offset + num_series
 
         all_dates = sorted(df["date"].unique())
         num_time_steps = len(all_dates)
@@ -107,33 +116,53 @@ class SalesGNNDataset(Dataset):
 
         num_features = len(feature_cols)
 
-        # New T-major layout: (Time, Nodes, Features)
+        # 2. Allocate Tensors
         features_arr = np.zeros(
             (num_time_steps, total_nodes, num_features), dtype=np.float32
         )
         labels_arr = np.zeros((num_time_steps, total_nodes), dtype=np.float32)
         is_open_arr = np.ones(
             (num_time_steps, total_nodes), dtype=np.float32
-        )  # Default open
+        )
 
-        # Series Mapping
-        store_map = {nbr: i for i, nbr in enumerate(stores_df["store_nbr"])}
-        family_map = {name: i for i, name in enumerate(families)}
-        series_offset = num_stores + num_families
+        # 3. Build Maps
+        store_map = {nbr: i for i, nbr in enumerate(stores_sorted["store_nbr"])}
+        family_map = {name: i for i, name in enumerate(families_sorted)}
 
-        # Fill Series Data
+        # 4. Fill Series Data (Lexical Order Guaranteed by loop and node_idx)
         for (s_nbr, f_name), group in df.groupby(["store_nbr", "family"]):
             if s_nbr not in store_map or f_name not in family_map:
                 continue
 
             s_idx = store_map[s_nbr]
             f_idx = family_map[f_name]
+            # Lexical index: Store index first, then Family index
             node_idx = series_offset + (s_idx * num_families) + f_idx
 
             t_indices = [date_to_idx[d] for d in group["date"]]
-            # Note the indexing swap [t, node]
             labels_arr[t_indices, node_idx] = group["log1p_sales"].fillna(0).values
             is_open_arr[t_indices, node_idx] = (group["is_closed"] == 0).astype(int)
             features_arr[t_indices, node_idx, :] = group[feature_cols].fillna(0).values
 
-        return SalesGNNDataset(features_arr, labels_arr, is_open_arr, window, horizon)
+        # 5. Feature Scaling (Exogenous Features)
+        # We scale features across the temporal dimension for each node if needed, 
+        # but standard way is across all observations per feature.
+        orig_shape = features_arr.shape
+        flat_features = features_arr.reshape(-1, num_features)
+        scaler = StandardScaler()
+        # Only fit on non-zero values if needed, but here we just do global scaling
+        features_arr = scaler.fit_transform(flat_features).reshape(orig_shape)
+
+        # 6. Spatial Distance Matrix (Optional Initialization for Model)
+        # Based on cluster similarity: dist=0 if same cluster, 1 otherwise
+        clusters = stores_sorted["cluster"].values
+        dist_matrix = (clusters[:, None] != clusters[None, :]).astype(float)
+        
+        dataset = SalesGNNDataset(features_arr, labels_arr, is_open_arr, window, horizon)
+        dataset.scaler = scaler
+        dataset.dist_matrix = torch.from_numpy(dist_matrix).float()
+        dataset.num_stores = num_stores
+        dataset.num_families = num_families
+        dataset.series_offset = series_offset
+        
+        return dataset
