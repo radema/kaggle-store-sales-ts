@@ -2,6 +2,7 @@ import torch
 import numpy as np
 from pathlib import Path
 from torch.utils.data import Dataset
+from typing import Tuple
 
 
 class SalesGNNDataset(Dataset):
@@ -52,30 +53,20 @@ class SalesGNNDataset(Dataset):
     def __len__(self):
         return self.num_samples
 
-    def __getitem__(self, idx):
+    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         enc_end = idx + self.window
         dec_end = enc_end + self.horizon
 
-        # History (Encoder): (Window, Nodes, Features)
-        x_enc = self.features[idx:enc_end, :, :]
+        # History (Encoder): (Window, Nodes, Features) -> (Nodes, Window, Features)
+        x_enc = self.features[idx:enc_end, :, :].transpose(0, 1)
 
-        # Future (Decoder): (Horizon, Nodes, Features)
-        x_dec = self.features[enc_end:dec_end, :, :]
+        # Target: (Horizon, Nodes) -> (Nodes, Horizon)
+        y = self.labels[enc_end:dec_end, :].transpose(0, 1)
 
-        # Target: (Horizon, Nodes)
-        y = self.labels[enc_end:dec_end, :]
+        # Hard Gating Mask: (Horizon, Nodes) -> (Nodes, Horizon)
+        mask = self.is_open[enc_end:dec_end, :].transpose(0, 1)
 
-        # Hard Gating Mask: (Horizon, Nodes)
-        mask = self.is_open[enc_end:dec_end, :]
-
-        # Transpose to (Nodes, Time, ...) for model compatibility or handle in model
-        # To avoid breaking model, we transpose here for now, but better to handle in model
-        return (
-            x_enc.transpose(0, 1),
-            x_dec.transpose(0, 1),
-            y.transpose(0, 1),
-            mask.transpose(0, 1),
-        )
+        return x_enc, y, mask
 
     def save_to_cache(self, directory):
         """Saves current tensors to a directory for later loading."""

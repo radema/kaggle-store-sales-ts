@@ -12,7 +12,6 @@ sys.path.append(str(Path(__file__).parents[1]))
 from src.models.gnn.model import SalesGNN
 from src.models.gnn.trainer import GNNTrainer
 from src.models.gnn.dataset import SalesGNNDataset
-from src.models.gnn.graph import build_adjacency
 from src.utils.logging import get_logger
 
 logger = get_logger("train_gnn")
@@ -50,10 +49,6 @@ def main(config_path, dev_mode=False):
 
     logger.info(f"Unique Families: {num_families}")
     logger.info(f"Unique Stores: {num_stores}")
-
-    # 3. Build Adjacency
-    adj_dicts = build_adjacency(stores_df, families)
-    edge_index = torch.cat([adj_dicts["spatial"], adj_dicts["hierarchy"]], dim=1)
 
     # 4. Prepare Dataset
     window = config["model"]["window"]
@@ -97,8 +92,17 @@ def main(config_path, dev_mode=False):
     logger.info("Data integrity verified (Internal imputation applied).")
 
     # Time split: Robust slicing relative to the ACTUAL cache size
-    # New T-major layout: (Time, Nodes, Features)
     num_cache_steps = full_dataset.features.shape[0]
+
+    if dev_mode:
+        # In dev mode, only take the last 100 days to make it snappy
+        dev_start_idx = max(0, num_cache_steps - 100)
+        full_dataset.features = full_dataset.features[dev_start_idx:, :, :]
+        full_dataset.labels = full_dataset.labels[dev_start_idx:, :]
+        full_dataset.is_open = full_dataset.is_open[dev_start_idx:, :]
+        num_cache_steps = full_dataset.features.shape[0]
+        logger.info(f"DEV MODE: Reduced cache to last {num_cache_steps} steps.")
+
     train_limit_idx = num_cache_steps - val_days
 
     logger.info(f"Cache time steps: {num_cache_steps}. Val days: {val_days}")
@@ -141,14 +145,14 @@ def main(config_path, dev_mode=False):
     logger.info(f"Train batches: {len(train_loader)} (Samples: {len(train_dataset)})")
     logger.info(f"Val batches: {len(val_loader)} (Samples: {len(val_dataset)})")
 
-    # 5. Initialize Model
     model = SalesGNN(
         num_stores=num_stores,
         num_families=num_families,
         feature_dim=len(feature_cols),
         hidden_dim=config["model"]["hidden_dim"],
-        edge_index=edge_index,
         horizon=horizon,
+        num_layers=config["model"].get("num_layers", 4),
+        embedding_dim=config["model"].get("embedding_dim", 16),
     )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config["training"]["lr"])

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from typing import Dict, List, Optional
 from src.utils.logging import get_logger
 
 
@@ -10,12 +11,14 @@ class CompositeLoss(nn.Module):
     MSE is calculated on log-scaled targets (consistent with RMSLE).
     """
 
-    def __init__(self, alpha=0.01):
+    def __init__(self, alpha: float = 0.01):
         super().__init__()
         self.alpha = alpha
         self.mse = nn.MSELoss()
 
-    def forward(self, y_pred, y_true, adj):
+    def forward(
+        self, y_pred: torch.Tensor, y_true: torch.Tensor, adj: torch.Tensor
+    ) -> torch.Tensor:
         # mse_loss: (Batch, Nodes, Horizon)
         mse_loss = self.mse(y_pred, y_true)
 
@@ -32,7 +35,13 @@ class GNNTrainer:
     """
 
     def __init__(
-        self, model, optimizer, alpha=0.01, device=None, patience=5, logger=None
+        self,
+        model: nn.Module,
+        optimizer: torch.optim.Optimizer,
+        alpha: float = 0.01,
+        device: Optional[torch.device] = None,
+        patience: int = 5,
+        logger=None,
     ):
         if device is None:
             if torch.cuda.is_available():
@@ -53,22 +62,23 @@ class GNNTrainer:
         self.best_val_loss = float("inf")
         self.history = {"train_loss": [], "val_loss": []}
 
-    def train_step(self, x_enc, x_dec, y, mask):
-        """Single optimization step with Mixed Precision support."""
+    def train_step(
+        self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor
+    ) -> float:
+        """Single optimization step."""
         self.model.train()
         self.optimizer.zero_grad()
 
-        x_enc = x_enc.to(self.device)
-        x_dec = x_dec.to(self.device)
+        x_enc = x_enc.to(self.device).contiguous()
         y = y.to(self.device)
         mask = mask.to(self.device)
 
-        # Autocast disabled for MPS due to numerical instability with GRUs
-        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
-        use_autocast = device_type == "cuda"
+        # Autocast strategy
+        device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
+        use_autocast = device_type in ["cuda", "mps"]
 
         with torch.autocast(device_type=device_type, enabled=use_autocast):
-            y_pred = self.model(x_enc, x_dec, mask)
+            y_pred = self.model(x_enc, is_open=mask)
             loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
         if torch.isnan(loss):
@@ -84,25 +94,28 @@ class GNNTrainer:
 
         return loss.item()
 
-    def val_step(self, x_enc, x_dec, y, mask):
+    def val_step(
+        self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor
+    ) -> float:
         """Single validation step."""
         self.model.eval()
-        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
-        use_autocast = device_type == "cuda"
+        device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
+        use_autocast = device_type in ["cuda", "mps"]
 
         with torch.no_grad():
-            x_enc = x_enc.to(self.device)
-            x_dec = x_dec.to(self.device)
+            x_enc = x_enc.to(self.device).contiguous()
             y = y.to(self.device)
             mask = mask.to(self.device)
 
             with torch.autocast(device_type=device_type, enabled=use_autocast):
-                y_pred = self.model(x_enc, x_dec, mask)
+                y_pred = self.model(x_enc, is_open=mask)
                 loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
         return loss.item()
 
-    def fit(self, train_loader, val_loader=None, epochs=20):
+    def fit(
+        self, train_loader, val_loader=None, epochs: int = 20
+    ) -> Dict[str, List[float]]:
         """Standard training loop with Early Stopping."""
         self.logger.info(f"Starting training for {epochs} epochs on {self.device}")
 
@@ -111,8 +124,8 @@ class GNNTrainer:
         for epoch in range(epochs):
             train_loss = 0
             for batch in train_loader:
-                x_enc, x_dec, y, mask = batch
-                loss = self.train_step(x_enc, x_dec, y, mask)
+                x_enc, y, mask = batch
+                loss = self.train_step(x_enc, y, mask)
                 if np.isnan(loss):
                     self.logger.error(
                         f"NaN loss detected at epoch {epoch + 1}. Halting."
@@ -127,8 +140,8 @@ class GNNTrainer:
             if val_loader:
                 val_loss = 0
                 for batch in val_loader:
-                    x_enc, x_dec, y, mask = batch
-                    val_loss += self.val_step(x_enc, x_dec, y, mask)
+                    x_enc, y, mask = batch
+                    val_loss += self.val_step(x_enc, y, mask)
                 avg_val_loss = val_loss / len(val_loader)
                 self.history["val_loss"].append(avg_val_loss)
                 val_info = f" | Val Loss: {avg_val_loss:.6f}"
@@ -158,22 +171,21 @@ class GNNTrainer:
 
         return self.history
 
-    def predict(self, loader):
+    def predict(self, loader) -> torch.Tensor:
         """Generates predictions for the entire loader."""
         self.model.eval()
         all_preds = []
-        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
-        use_autocast = device_type == "cuda"
+        device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
+        use_autocast = device_type in ["cuda", "mps"]
 
         with torch.no_grad():
             for batch in loader:
-                x_enc, x_dec, _, mask = batch
-                x_enc = x_enc.to(self.device)
-                x_dec = x_dec.to(self.device)
+                x_enc, _, mask = batch
+                x_enc = x_enc.to(self.device).contiguous()
                 mask = mask.to(self.device)
 
                 with torch.autocast(device_type=device_type, enabled=use_autocast):
-                    y_pred = self.model(x_enc, x_dec, mask)
+                    y_pred = self.model(x_enc, is_open=mask)
                 all_preds.append(y_pred.cpu())
 
         return torch.cat(all_preds, dim=0)
