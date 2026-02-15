@@ -41,10 +41,11 @@ def smoke_test_model():
     )
 
     # Check adjacency
-    adj = model.get_adjacency()
-    print(f"Adjacency shape: {adj.shape}")
-    num_series = num_stores * num_families
-    assert adj.shape == (num_series, num_series), f"Wrong adjacency shape: {adj.shape}"
+    adjs = model.get_adjacency()
+    print(f"Factored Adjacencies: {[a.shape for a in adjs]}")
+    assert len(adjs) == 2
+    assert adjs[0].shape == (num_stores, num_stores)
+    assert adjs[1].shape == (num_families, num_families)
 
     print("Smoke Test Passed!")
 

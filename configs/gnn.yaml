@@ -5,12 +5,12 @@ model:
   window: 30
   horizon: 16
   num_layers: 4
-  embedding_dim: 4
+  embedding_dim: 16
 
 training:
   epochs: 100
   batch_size: 16
-  lr: 0.001
+  lr: 0.0005
   patience: 10
   val_days: 16 # Use last horizon days for validation
 

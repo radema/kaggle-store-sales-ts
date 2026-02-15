@@ -17,15 +17,17 @@ class CompositeLoss(nn.Module):
         self.mse = nn.MSELoss()
 
     def forward(
-        self, y_pred: torch.Tensor, y_true: torch.Tensor, adj: torch.Tensor
+        self, y_pred: torch.Tensor, y_true: torch.Tensor, adjs: List[torch.Tensor]
     ) -> torch.Tensor:
         # mse_loss: (Batch, Nodes, Horizon)
         mse_loss = self.mse(y_pred, y_true)
 
-        # l1_loss: sparsity constraint on learned graph
-        l1_loss = torch.norm(adj, p=1) / (adj.shape[0] * adj.shape[1])
-
-        return mse_loss + self.alpha * l1_loss
+        # l1_loss: sparsity constraint on all factorized graphs
+        l1_sum = 0
+        for adj in adjs:
+            l1_sum += torch.norm(adj, p=1) / adj.numel()
+        
+        return mse_loss + self.alpha * l1_sum
 
 
 class GNNTrainer:

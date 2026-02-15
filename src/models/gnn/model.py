@@ -1,35 +1,37 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 
 
-class CausalConv2d(nn.Module):
-    """2D Convolution with causal padding on the time dimension."""
+class CausalConv3d(nn.Module):
+    """3D Convolution with causal padding on the time dimension."""
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int, dilation: int = 1):
         super().__init__()
         self.padding = (kernel_size - 1) * dilation
-        self.conv = nn.Conv2d(
+        # (B, C, S, F, T) -> kernel treats S, F as spatial, T as time
+        self.conv = nn.Conv3d(
             in_channels,
             out_channels,
-            kernel_size=(1, kernel_size),
+            kernel_size=(1, 1, kernel_size),
             padding=0,
-            dilation=(1, dilation),
+            dilation=(1, 1, dilation),
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = F.pad(x, (self.padding, 0))
+        # x: (B, C, S, F, T)
+        x = F.pad(x, (self.padding, 0)) # Pad last dim (Time)
         return self.conv(x)
 
 
 class TemporalBlock(nn.Module):
-    """Gated Temporal Block."""
+    """Gated Temporal Block in 5D."""
 
     def __init__(self, in_channels: int, out_channels: int, kernel_size: int, dilation: int):
         super().__init__()
-        self.filter_conv = CausalConv2d(in_channels, out_channels, kernel_size, dilation)
-        self.gate_conv = CausalConv2d(in_channels, out_channels, kernel_size, dilation)
+        self.filter_conv = CausalConv3d(in_channels, out_channels, kernel_size, dilation)
+        self.gate_conv = CausalConv3d(in_channels, out_channels, kernel_size, dilation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return torch.tanh(self.filter_conv(x)) * torch.sigmoid(self.gate_conv(x))
@@ -38,8 +40,7 @@ class TemporalBlock(nn.Module):
 class FactoredGCN(nn.Module):
     """
     Factored Spatial Mixer.
-    Processes series data by decomposing interactions into Store-Store and Family-Family.
-    Complexity: O(S^2 + F^2) instead of O((S*F)^2)
+    Complexity: O(S^2 + F^2)
     """
 
     def __init__(self, channels: int, num_stores: int, num_families: int, embedding_dim: int):
@@ -47,90 +48,78 @@ class FactoredGCN(nn.Module):
         self.S = num_stores
         self.F = num_families
         
-        # Small learnable embeddings for the two graphs
         self.e1_s = nn.Parameter(torch.randn(num_stores, embedding_dim))
         self.e2_s = nn.Parameter(torch.randn(num_stores, embedding_dim))
         
         self.e1_f = nn.Parameter(torch.randn(num_families, embedding_dim))
         self.e2_f = nn.Parameter(torch.randn(num_families, embedding_dim))
 
-        self.proj = nn.Conv2d(channels, channels, kernel_size=1)
+        self.proj = nn.Conv3d(channels, channels, kernel_size=1)
 
-    def get_adj_s(self) -> torch.Tensor:
-        return F.relu(torch.tanh(torch.matmul(self.e1_s, self.e2_s.t())))
-
-    def get_adj_f(self) -> torch.Tensor:
-        return F.relu(torch.tanh(torch.matmul(self.e1_f, self.e2_f.t())))
-
-    def forward(self, x_series: torch.Tensor) -> torch.Tensor:
-        """
-        x_series: (B, C, S*F, T) 
-        We treat the S*F nodes as a 2D grid of Store x Family
-        """
-        B, C, _, T = x_series.shape
+    def get_adjs(self) -> List[torch.Tensor]:
+        adj_s = F.relu(torch.tanh(torch.matmul(self.e1_s, self.e2_s.t())))
+        adj_f = F.relu(torch.tanh(torch.matmul(self.e1_f, self.e2_f.t())))
         
-        # 1. Reshape to Grid: (B, C, S, F, T)
-        x = x_series.view(B, C, self.S, self.F, T)
+        # Row-normalize to keep magnitudes stable across layers
+        # Adding epsilon to avoid div by zero
+        adj_s = adj_s / (adj_s.sum(dim=-1, keepdim=True) + 1e-6)
+        adj_f = adj_f / (adj_f.sum(dim=-1, keepdim=True) + 1e-6)
         
-        adj_s = self.get_adj_s() # (S, S)
-        adj_f = self.get_adj_f() # (F, F)
+        return [adj_s, adj_f]
 
-        # 2. Store-wise Mixing (Inter-store correlations for each family)
-        # We want to multiply adj_s @ x on the S dimension (dim 2)
-        # torch.matmul handles multiple batch dims (B, C) and trailing dims (F, T)
-        # We need to move S to the second-to-last pos to use matmul easily
-        # Current: (B, C, S, F, T) -> (B, C, F, T, S)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (B, C, S, F, T)"""
+        B, C, S, F, T = x.shape
+        adjs = self.get_adjs()
+        adj_s, adj_f = adjs[0], adjs[1]
+
+        # 1. Store-wise
+        # (B, C, S, F, T) -> (B, C, F, T, S)
         x = x.permute(0, 1, 3, 4, 2)
         x = torch.matmul(x, adj_s.t()) 
         
-        # 3. Family-wise Mixing (Inter-family correlations for each store)
-        # Current: (B, C, F, T, S) -> (B, C, S, T, F)
+        # 2. Family-wise
+        # (B, C, F, T, S) -> (B, C, S, T, F)
         x = x.permute(0, 1, 4, 3, 2)
         x = torch.matmul(x, adj_f.t())
         
-        # Back to (B, C, S, F, T) -> (B, C, S*F, T)
-        x = x.permute(0, 1, 2, 4, 3).reshape(B, C, -1, T)
-        
+        # Back to (B, C, S, F, T)
+        x = x.permute(0, 1, 2, 4, 3)
         return self.proj(x)
 
 
 class STGNNBlock(nn.Module):
-    """Factored Spatio-Temporal block."""
+    """Factored STGNN block operating on a 5D Grid."""
 
     def __init__(self, hidden_dim: int, num_stores: int, num_families: int, 
                  kernel_size: int, dilation: int, embedding_dim: int):
         super().__init__()
         self.tcn = TemporalBlock(hidden_dim, hidden_dim, kernel_size, dilation)
         self.gcn = FactoredGCN(hidden_dim, num_stores, num_families, embedding_dim)
-        
-        self.norm = nn.BatchNorm2d(hidden_dim)
-        self.skip_proj = nn.Conv2d(hidden_dim, hidden_dim, kernel_size=1)
+        self.norm = nn.BatchNorm3d(hidden_dim)
+        self.skip_proj = nn.Conv3d(hidden_dim, hidden_dim, kernel_size=1)
 
-    def forward(self, x_all: torch.Tensor, series_offset: int) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        x_all: (B, C, N, T) where N = S + F + S*F
-        """
-        # 1. Temporal Update for everyone
-        x_t = self.tcn(x_all)
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """x: (B, C, S, F, T)"""
+        # 1. Temporal
+        x_t = self.tcn(x)
         
-        # 2. Spatial Update ONLY for series nodes (The 1782 leaf nodes)
-        x_series = x_t[:, :, series_offset:, :]
-        x_spatial = self.gcn(x_series)
+        # 2. Spatial
+        x_spatial = self.gcn(x_t)
         
-        # Update original leaf nodes in the tensor
-        x_new = x_t.clone()
-        x_new[:, :, series_offset:, :] = x_spatial
+        # 3. Residual & Norm (5D)
+        out = self.norm(x_spatial + x)
         
-        # 3. Residual & Norm
-        out = self.norm(x_new + x_all)
+        # Skip connection
+        skip = self.skip_proj(x_spatial)
         
-        return out, self.skip_proj(x_new)
+        return out, skip
 
 
 class SalesGNN(nn.Module):
     """
-    Factored SalesGNN: High-speed hierarchical forecasting.
-    Separates Store-level and Family-level spatial mixing.
+    Optimized Factored STGNN.
+    Ignores non-series nodes to save memory.
     """
 
     def __init__(
@@ -149,75 +138,70 @@ class SalesGNN(nn.Module):
         self.num_stores = num_stores
         self.num_families = num_families
         self.series_offset = num_stores + num_families
-        self.num_nodes = self.series_offset + (num_stores * num_families)
         self.horizon = horizon
         self.use_checkpointing = use_checkpointing
 
-        # Project input features to channels
+        # Internal feature projection (still 2D as we enter from the node layout)
         self.input_proj = nn.Conv2d(feature_dim, hidden_dim, kernel_size=1)
+        
+        self.layers = nn.ModuleList([
+            STGNNBlock(hidden_dim, num_stores, num_families, kernel_size, 2**i, embedding_dim)
+            for i in range(num_layers)
+        ])
 
-        self.layers = nn.ModuleList()
-        for i in range(num_layers):
-            self.layers.append(
-                STGNNBlock(hidden_dim, num_stores, num_families, kernel_size, 2**i, embedding_dim)
-            )
-
+        # Output head (re-project from 3D grid back to 1D nodes)
         self.fc_head = nn.Sequential(
-            nn.Conv2d(hidden_dim, hidden_dim * 2, kernel_size=1),
+            nn.Conv3d(hidden_dim, hidden_dim * 2, kernel_size=1),
             nn.ReLU(),
-            nn.Conv2d(hidden_dim * 2, horizon, kernel_size=1),
+            nn.Conv3d(hidden_dim * 2, horizon, kernel_size=1),
         )
 
     def forward(self, x_enc: torch.Tensor, is_open: Optional[torch.Tensor] = None) -> torch.Tensor:
         """x_enc: (Batch, Nodes, Time, Features)"""
-        # (B, N, T, F) -> (B, F, N, T)
-        x = x_enc.permute(0, 3, 1, 2).contiguous()
+        # 1. Extract ONLY Series Nodes (Ignore Store/Family hubs)
+        x = x_enc[:, self.series_offset:, :, :].permute(0, 3, 1, 2).contiguous()
         x = self.input_proj(x)
+        
+        # Reshape to 5D Grid: (B, C, S, F, T)
+        B, C, _, T = x.shape
+        x = x.view(B, C, self.num_stores, self.num_families, T)
 
         skip_total = 0
         for layer in self.layers:
             if self.training and self.use_checkpointing:
-                # Wrap the layer call in checkpoint
-                def create_custom_forward(module):
-                    def custom_forward(*args):
-                        return module(*args)
-
-                    return custom_forward
-
-                x, skip = torch.utils.checkpoint.checkpoint(
-                    create_custom_forward(layer),
-                    x,
-                    self.series_offset,
-                    use_reentrant=False,
-                )
+                x, skip = torch.utils.checkpoint.checkpoint(layer, x, use_reentrant=False)
             else:
-                x, skip = layer(x, self.series_offset)
+                x, skip = layer(x)
             skip_total = skip_total + skip
 
         # Pool temporal dimensions (take last step)
-        final_feat = skip_total[..., -1:] # (B, C, N, 1)
+        # skip_total is 5D: (B, C, S, F, T)
+        final_feat = skip_total[..., -1:] # (B, C, S, F, 1)
         
-        # Output: (B, Horizon, N, 1)
+        # Output: (B, Horizon, S, F, 1)
         out = self.fc_head(final_feat)
-        out = out.squeeze(-1).permute(0, 2, 1).contiguous()
+        
+        # Flatten back to (Batch, Horizon, S*F)
+        out = out.view(B, self.horizon, -1)
+        
+        # Format back to (Batch, Nodes, Horizon)
+        out = out.permute(0, 2, 1).contiguous()
 
         if is_open is not None:
-            out = out * is_open
+            # Slicing the mask to match only series nodes
+            mask = is_open[:, self.series_offset:, :]
+            out = out * mask
 
-        return out
+        # To maintain compatibility with the Dataset, we pad the summary nodes with zeros
+        # Result: (B, 1869, Horizon)
+        full_out = torch.zeros(B, self.num_nodes, self.horizon, device=out.device)
+        full_out[:, self.series_offset:, :] = out
+        return full_out
 
-    def get_adjacency(self) -> torch.Tensor:
-        """Returns the total Kronecker-style adjacency for visualization."""
-        # This is high-memory, only used for debugging/visualization
-        adj_s = self.layers[0].gcn.get_adj_s()
-        adj_f = self.layers[0].gcn.get_adj_f()
-        
-        # Identity matrices
-        I_s = torch.eye(self.num_stores, device=adj_s.device)
-        I_f = torch.eye(self.num_families, device=adj_f.device)
-        
-        # Kronecker sum approximation A = (As @ If) + (Is @ Af)
-        # This represents the internal spatial mixing logic
-        term1 = torch.kron(adj_s, I_f)
-        term2 = torch.kron(I_s, adj_f)
-        return term1 + term2
+    @property
+    def num_nodes(self):
+        return self.series_offset + (self.num_stores * self.num_families)
+
+    def get_adjacency(self) -> List[torch.Tensor]:
+        """Returns the list of factorized adjs for regularization."""
+        return self.layers[0].gcn.get_adjs()
