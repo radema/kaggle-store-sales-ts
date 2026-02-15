@@ -38,6 +38,8 @@ class SalesGNNDataset(Dataset):
 
         self.window = window
         self.horizon = horizon
+        self.dist_matrix = None
+        self.static_node_features = None
 
         # Calculate valid starting indices for windows
         # Current layout: (Time, Nodes, ...)
@@ -76,6 +78,11 @@ class SalesGNNDataset(Dataset):
         np.save(path / "features.npy", self.features.numpy())
         np.save(path / "labels.npy", self.labels.numpy())
         np.save(path / "is_open.npy", self.is_open.numpy())
+        
+        if self.dist_matrix is not None:
+            np.save(path / "dist_matrix.npy", self.dist_matrix.numpy())
+        if self.static_node_features is not None:
+            np.save(path / "static_node_features.npy", self.static_node_features.numpy())
 
     @classmethod
     def load_from_cache(cls, directory, window, horizon, mmap=False):
@@ -87,7 +94,18 @@ class SalesGNNDataset(Dataset):
         labels = np.load(path / "labels.npy", mmap_mode=mmap_mode)
         is_open = np.load(path / "is_open.npy", mmap_mode=mmap_mode)
 
-        return cls(features, labels, is_open, window, horizon)
+        dataset = cls(features, labels, is_open, window, horizon)
+        
+        # Load auxiliary tensors if they exist
+        if (path / "dist_matrix.npy").exists():
+            dist_matrix = np.load(path / "dist_matrix.npy")
+            dataset.dist_matrix = torch.from_numpy(dist_matrix).float()
+            
+        if (path / "static_node_features.npy").exists():
+            static_node_features = np.load(path / "static_node_features.npy")
+            dataset.static_node_features = torch.from_numpy(static_node_features).float()
+            
+        return dataset
 
     @staticmethod
     def from_df(df, stores_df, families, feature_cols, window, horizon, use_hub_nodes=False):
@@ -158,11 +176,20 @@ class SalesGNNDataset(Dataset):
         clusters = stores_sorted["cluster"].values
         dist_matrix = (clusters[:, None] != clusters[None, :]).astype(float)
         
+        # 7. Static Store Metadata Encoding
+        # We use basic LabelEncoding for Categorical Store metadata
+        from sklearn.preprocessing import LabelEncoder
+        static_df = stores_sorted[["city", "state", "type", "cluster"]].copy()
+        for col in ["city", "state", "type"]:
+            static_df[col] = LabelEncoder().fit_transform(static_df[col])
+        
+        static_node_features = torch.from_numpy(static_df.values).float()
+
         dataset = SalesGNNDataset(features_arr, labels_arr, is_open_arr, window, horizon)
         dataset.scaler = scaler
         dataset.dist_matrix = torch.from_numpy(dist_matrix).float()
+        dataset.static_node_features = static_node_features
         dataset.num_stores = num_stores
         dataset.num_families = num_families
         dataset.series_offset = series_offset
-        
         return dataset

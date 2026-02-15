@@ -8,14 +8,14 @@ model:
   embedding_dim: 16
 
 training:
-  epochs: 100
+  epochs: 200
   batch_size: 16
-  lr: 0.0002
+  lr: 0.001
   patience: 10
   val_days: 16 # Use last horizon days for validation
 
 data:
-  train_start: "2017-01-01" # Much faster and more relevant
+  train_start: "2016-01-01" # Much faster and more relevant
   features:
     - "onpromotion"
     - "dcoilwtico"

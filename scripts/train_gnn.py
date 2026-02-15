@@ -75,6 +75,8 @@ def main(config_path, dev_mode=False):
             window=window,
             horizon=horizon,
         )
+        logger.info(f"Saving GNN Dataset to cache: {cache_dir}")
+        full_dataset.save_to_cache(cache_dir)
 
     # 4.1 Data Integrity Check (on final tensors)
     if (
@@ -153,6 +155,9 @@ def main(config_path, dev_mode=False):
         horizon=horizon,
         num_layers=config["model"].get("num_layers", 4),
         embedding_dim=config["model"].get("embedding_dim", 16),
+        dist_matrix=full_dataset.dist_matrix,
+        static_feat_dim=full_dataset.static_node_features.shape[1] if full_dataset.static_node_features is not None else 0,
+        use_checkpointing=False  # Disabled for max speed on optimized architecture
     )
 
     optimizer = torch.optim.Adam(model.parameters(), lr=config["training"]["lr"])
@@ -164,6 +169,7 @@ def main(config_path, dev_mode=False):
         alpha=config["model"]["alpha"],
         patience=config["training"]["patience"],
         logger=logger,
+        static_node_features=full_dataset.static_node_features
     )
 
     logger.info("Starting training loop...")

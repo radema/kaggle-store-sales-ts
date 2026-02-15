@@ -44,6 +44,7 @@ class GNNTrainer:
         device: Optional[torch.device] = None,
         patience: int = 5,
         logger=None,
+        static_node_features: Optional[torch.Tensor] = None,
     ):
         if device is None:
             if torch.cuda.is_available():
@@ -63,6 +64,12 @@ class GNNTrainer:
         self.best_model_state = None
         self.best_val_loss = float("inf")
         self.history = {"train_loss": [], "val_loss": []}
+        
+        # Move static features to device once
+        if static_node_features is not None:
+            self.static_node_features = static_node_features.to(self.device).contiguous()
+        else:
+            self.static_node_features = None
 
     def train_step(
         self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor
@@ -83,12 +90,12 @@ class GNNTrainer:
             y = y[:, offset:, :].contiguous()
             mask = mask[:, offset:, :].contiguous()
 
-        # Autocast strategy
-        device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
-        use_autocast = device_type in ["cuda", "mps"]
+        # Autocast strategy: CUDA is stable with FP16, MPS is often unstable
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_autocast = device_type == "cuda"
 
         with torch.autocast(device_type=device_type, enabled=use_autocast):
-            y_pred = self.model(x_enc, is_open=mask)
+            y_pred = self.model(x_enc, is_open=mask, static_feats=self.static_node_features)
             loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
         if torch.isnan(loss):
@@ -109,8 +116,8 @@ class GNNTrainer:
     ) -> float:
         """Single validation step."""
         self.model.eval()
-        device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
-        use_autocast = device_type in ["cuda", "mps"]
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_autocast = device_type == "cuda"
 
         with torch.no_grad():
             x_enc = x_enc.to(self.device).contiguous()
@@ -125,7 +132,7 @@ class GNNTrainer:
                 mask = mask[:, offset:, :].contiguous()
 
             with torch.autocast(device_type=device_type, enabled=use_autocast):
-                y_pred = self.model(x_enc, is_open=mask)
+                y_pred = self.model(x_enc, is_open=mask, static_feats=self.static_node_features)
                 loss = self.loss_fn(y_pred, y, self.model.get_adjacency())
 
         return loss.item()
@@ -192,8 +199,8 @@ class GNNTrainer:
         """Generates predictions for the entire loader."""
         self.model.eval()
         all_preds = []
-        device_type = "cuda" if "cuda" in str(self.device) else ("mps" if "mps" in str(self.device) else "cpu")
-        use_autocast = device_type in ["cuda", "mps"]
+        device_type = "cuda" if "cuda" in str(self.device) else "cpu"
+        use_autocast = device_type == "cuda"
 
         with torch.no_grad():
             for batch in loader:
@@ -202,7 +209,7 @@ class GNNTrainer:
                 mask = mask.to(self.device)
 
                 with torch.autocast(device_type=device_type, enabled=use_autocast):
-                    y_pred = self.model(x_enc, is_open=mask)
+                    y_pred = self.model(x_enc, is_open=mask, static_feats=self.static_node_features)
                 all_preds.append(y_pred.cpu())
 
         return torch.cat(all_preds, dim=0)
