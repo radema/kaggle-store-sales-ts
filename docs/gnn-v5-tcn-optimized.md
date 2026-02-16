@@ -15,42 +15,43 @@ This document describes the high-performance architecture of the Spatio-Temporal
 
 ---
 
-## Core Components
+## Technical Deep-Dive: Why is it so fast?
 
-### 1. Temporal Folding (CausalConv1d)
-The 5D grid $(B, C, S, F, T)$ is reshaped into $(B \times S \times F, C, T)$ before processing.
-*   **Performance**: This bypasses the overhead of 3D convolution kernels that are not optimized for the "time-only" $(1, 1, K)$ window.
-*   **Causality**: Uses causal padding to ensure the model cannot look into the future during training.
+### 1. The Power of Folding (Temporal Efficiency)
+In time-series GNNs, the temporal dimension is often handled by 3D convolutions with kernels of size $(1, 1, K)$. While mathematically sound, these "thin" kernels are a performance nightmare for GPUs. 
+*   **The Problem**: 3D operations require complex memory indexing that often falls back to slow generic kernels on Metal.
+*   **The Solution**: We "fold" the spatial dimensions into the batch dimension: $(B, C, S, F, T) \to (B \cdot S \cdot F, C, T)$.
+*   **The Impact**: The GPU now sees a very large number of 1D signals. This saturates the execution units (EUs) and uses the same highly tuned kernels used for audio and NLP processing, achieving lightning-fast causal convolution.
 
-### 2. Einstein Mixer (FactoredGCN)
-Instead of flattening the graph, we use factorized spatial and family adjacencies:
-*   **Efficiency**: Operates in $O(S^2 + F^2)$ instead of $O((S \times F)^2)$.
-*   **Zero-Copy**: `torch.einsum` allows the model to mix store features and family features without explicitly permuting or re-ordering the tensor in VRAM.
+### 2. Zero-Copy Einstein Summation (Spatial Efficiency)
+Mixing information across 54 stores and 33 families traditionally requires multiple `transpose()` and `permute()` calls to align vectors for matrix multiplication.
+*   **The Problem**: On many architectures, particularly unified-memory systems like Apple Silicon, these permutations can trigger "out-of-place" operations that copy massive amounts of data in VRAM.
+*   **The Solution**: `torch.einsum` allows the Metal compiler to compute the contraction $(B, C, S, F, T) \times (S, S) \to (B, C, S, F, T)$ in a single multi-dimensional kernel without moving a single byte of data unnecessarily.
 
-### 3. Static Meta-Embeddings
-The model incorporates information from the competition's metadata:
-*   **Input**: `city`, `state`, `type`, and `cluster`.
-*   **Effect**: The adjacency matrix is initialized via SVD from these features, creating a "smart initialization" where stores in the same city or cluster have a natural prior to share information.
-
----
-
-## Training Stability Protocols
-
-### Identity-plus-Epsilon (I+ε)
-Adjacency matrices are biased towards the diagonal using:
-$$A = \text{ReLU}(\text{tanh}(E_1 E_2^T)) + I \cdot \epsilon$$
-This ensures that every node always "sees" its own history, even if the graph learning hasn't converged, preventing gradient collapse.
-
-### GroupNorm Stability
-`GroupNorm` (with 8 groups) is used to normalize the hidden features. This ensures the model converges identically whether trained with a single sample (Dev Mode) or a large batch (Production).
-
-### Gradient Flow
-- **Clipping**: Gradients are clipped at `1.0` to handle the high learning rates (`0.001`) enabled by this faster architecture.
-- **Autocast Bypass**: Autocast is disabled for MPS to ensure the precision required for the Einstein Summation operations is maintained.
+### 3. Hardware-Aware Metadata Integration
+Previously, the model had to "discover" that Store 1 and Store 2 were next to each other through thousands of iterations.
+*   **The Solution**: We project static metadata (`city`, `state`, `type`, `cluster`) into the initial learnable adjacency matrix using SVD.
+*   **The Impact**: The model starts training with a "Geography-Aware" prior. This acts as a warm-start for the graph, allowing the optimizer to focus on fine-tuning residual relationships instead of learning basic physical proximity from scratch.
 
 ---
 
-## Performance Summary
-*   **Epoch Time (MPS)**: ~1-2 seconds (Dev Mode) / ~30-40 seconds (Full Dataset).
-*   **Memory Footprint**: Extremely low due to zero-copy operations and folding.
-*   **Convergence**: Faster and more stable due to informing the graph with static store metadata.
+## Stability Protocols
+
+### GroupNorm vs. BatchNorm
+`BatchNorm` calculates statistics across the batch dimension. If the batch size is small (common when prototyping or using complex GNNs), these statistics are noisy or undefined (if Batch=1).
+- **Solution**: `GroupNorm` splits channels into groups and normalizes within each sample. This is batch-size independent and maintains identical behavior during development and production.
+
+### SVD Clamping & FP32
+To prevent NaNs during the SVD initialization:
+- **Clamping**: Singular values are clamped at `1e-7` before the square root.
+- **Precision**: Autocast is disabled for MPS. While FP16/BF16 is faster on CUDA, the current Metal implementation can suffer from underflow during dense `einsum` contractions. FP32 provides the "numerical floor" required for 200+ epochs of stable training.
+
+---
+
+## Lessons Learned & Best Practices
+
+1.  **3D is a Trap on Apple Silicon**: If you aren't doing volumetric video processing, avoid `Conv3d`. Fold your dimensions and use `Conv1d` or `Conv2d`. The speedup is not linear; it is order-of-magnitude.
+2.  **Permute is a Hidden Cost**: In Unified Memory architectures, "reshaping" is free but "permuting" (changing memory stride) can be expensive. Always prefer `einsum` over `permute + bmm`.
+3.  **Inductive Bias is the Best Optimizer**: Machine learning models should not have to learn what we already know. Providing the model with store clusters and cities through static features is more effective than any learning rate schedule.
+4.  **Dev Mode is a Necessity**: When working with GNNs, always build a "Dev Mode" that can run on Batch Size 1 with a tiny fraction of data. If your model crashes there, it won't be stable on the full set.
+5.  **Autocast is not "Set and Forget"**: On MPS, half-precision is still maturing. For complex spatio-temporal layers, stick to FP32. The performance loss is negligible compared to the cost of a failed 10-hour run due to a NaN at Epoch 150.
