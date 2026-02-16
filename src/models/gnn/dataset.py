@@ -2,8 +2,8 @@ import torch
 import numpy as np
 from pathlib import Path
 from torch.utils.data import Dataset
-from typing import Tuple
-
+from typing import Tuple, Optional
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 class SalesGNNDataset(Dataset):
     """
@@ -12,14 +12,6 @@ class SalesGNNDataset(Dataset):
     """
 
     def __init__(self, features, labels, is_open, window, horizon):
-        """
-        Args:
-            features: np.array or torch.Tensor of shape (Time, Nodes, Features)
-            labels: np.array or torch.Tensor of shape (Time, Nodes)
-            is_open: np.array or torch.Tensor of shape (Time, Nodes)
-            window: int, input sequence length (T_in)
-            horizon: int, forecast horizon (T_out)
-        """
         # Ensure we have tensors
         if isinstance(features, np.ndarray):
             self.features = torch.from_numpy(features).float()
@@ -41,8 +33,6 @@ class SalesGNNDataset(Dataset):
         self.dist_matrix = None
         self.static_node_features = None
 
-        # Calculate valid starting indices for windows
-        # Current layout: (Time, Nodes, ...)
         self.num_time_steps = self.features.shape[0]
         self.num_samples = self.num_time_steps - window - horizon + 1
 
@@ -71,7 +61,6 @@ class SalesGNNDataset(Dataset):
         return x_enc, y, mask
 
     def save_to_cache(self, directory):
-        """Saves current tensors to a directory for later loading."""
         path = Path(directory)
         path.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +75,6 @@ class SalesGNNDataset(Dataset):
 
     @classmethod
     def load_from_cache(cls, directory, window, horizon, mmap=False):
-        """Loads tensors from a directory, optionally using memory mapping."""
         path = Path(directory)
         mmap_mode = "r" if mmap else None
 
@@ -96,7 +84,6 @@ class SalesGNNDataset(Dataset):
 
         dataset = cls(features, labels, is_open, window, horizon)
         
-        # Load auxiliary tensors if they exist
         if (path / "dist_matrix.npy").exists():
             dist_matrix = np.load(path / "dist_matrix.npy")
             dataset.dist_matrix = torch.from_numpy(dist_matrix).float()
@@ -109,14 +96,6 @@ class SalesGNNDataset(Dataset):
 
     @staticmethod
     def from_df(df, stores_df, families, feature_cols, window, horizon, use_hub_nodes=False):
-        """
-        Helper to construct the 3D tensors from a flat DataFrame.
-        Ordering: Lexical Sort of Stores -> Families.
-        Layout: (Time, Nodes, Features)
-        """
-        from sklearn.preprocessing import StandardScaler
-
-        # 1. Lexical Sorting for alignment with submission logic
         stores_sorted = stores_df.sort_values("store_nbr")
         families_sorted = sorted(families)
         
@@ -124,7 +103,6 @@ class SalesGNNDataset(Dataset):
         num_families = len(families_sorted)
         num_series = num_stores * num_families
         
-        # Hub nodes (summary nodes) are now optional to eliminate MPS bottlenecks
         series_offset = (num_stores + num_families) if use_hub_nodes else 0
         total_nodes = series_offset + num_series
 
@@ -134,27 +112,19 @@ class SalesGNNDataset(Dataset):
 
         num_features = len(feature_cols)
 
-        # 2. Allocate Tensors
-        features_arr = np.zeros(
-            (num_time_steps, total_nodes, num_features), dtype=np.float32
-        )
+        features_arr = np.zeros((num_time_steps, total_nodes, num_features), dtype=np.float32)
         labels_arr = np.zeros((num_time_steps, total_nodes), dtype=np.float32)
-        is_open_arr = np.ones(
-            (num_time_steps, total_nodes), dtype=np.float32
-        )
+        is_open_arr = np.ones((num_time_steps, total_nodes), dtype=np.float32)
 
-        # 3. Build Maps
         store_map = {nbr: i for i, nbr in enumerate(stores_sorted["store_nbr"])}
         family_map = {name: i for i, name in enumerate(families_sorted)}
 
-        # 4. Fill Series Data (Lexical Order Guaranteed by loop and node_idx)
         for (s_nbr, f_name), group in df.groupby(["store_nbr", "family"]):
             if s_nbr not in store_map or f_name not in family_map:
                 continue
 
             s_idx = store_map[s_nbr]
             f_idx = family_map[f_name]
-            # Lexical index: Store index first, then Family index
             node_idx = series_offset + (s_idx * num_families) + f_idx
 
             t_indices = [date_to_idx[d] for d in group["date"]]
@@ -162,23 +132,14 @@ class SalesGNNDataset(Dataset):
             is_open_arr[t_indices, node_idx] = (group["is_closed"] == 0).astype(int)
             features_arr[t_indices, node_idx, :] = group[feature_cols].fillna(0).values
 
-        # 5. Feature Scaling (Exogenous Features)
-        # We scale features across the temporal dimension for each node if needed, 
-        # but standard way is across all observations per feature.
         orig_shape = features_arr.shape
         flat_features = features_arr.reshape(-1, num_features)
         scaler = StandardScaler()
-        # Only fit on non-zero values if needed, but here we just do global scaling
         features_arr = scaler.fit_transform(flat_features).reshape(orig_shape)
 
-        # 6. Spatial Distance Matrix (Optional Initialization for Model)
-        # Based on cluster similarity: dist=0 if same cluster, 1 otherwise
         clusters = stores_sorted["cluster"].values
         dist_matrix = (clusters[:, None] != clusters[None, :]).astype(float)
         
-        # 7. Static Store Metadata Encoding
-        # We use basic LabelEncoding for Categorical Store metadata
-        from sklearn.preprocessing import LabelEncoder
         static_df = stores_sorted[["city", "state", "type", "cluster"]].copy()
         for col in ["city", "state", "type"]:
             static_df[col] = LabelEncoder().fit_transform(static_df[col])
@@ -192,4 +153,5 @@ class SalesGNNDataset(Dataset):
         dataset.num_stores = num_stores
         dataset.num_families = num_families
         dataset.series_offset = series_offset
+        
         return dataset

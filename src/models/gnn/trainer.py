@@ -6,11 +6,6 @@ from src.utils.logging import get_logger
 
 
 class CompositeLoss(nn.Module):
-    """
-    Combined Loss: MSE + L1 Regularization on Adjacency matrix.
-    MSE is calculated on log-scaled targets (consistent with RMSLE).
-    """
-
     def __init__(self, alpha: float = 0.01):
         super().__init__()
         self.alpha = alpha
@@ -19,23 +14,14 @@ class CompositeLoss(nn.Module):
     def forward(
         self, y_pred: torch.Tensor, y_true: torch.Tensor, adjs: List[torch.Tensor]
     ) -> torch.Tensor:
-        # mse_loss: (Batch, Nodes, Horizon)
         mse_loss = self.mse(y_pred, y_true)
-
-        # l1_loss: sparsity constraint on all factorized graphs
         l1_sum = 0
         for adj in adjs:
             l1_sum += torch.norm(adj, p=1) / adj.numel()
-        
         return mse_loss + self.alpha * l1_sum
 
 
 class GNNTrainer:
-    """
-    Trainer for SalesGNN model.
-    Handles device placement, training loops, and predictions with robust logging.
-    """
-
     def __init__(
         self,
         model: nn.Module,
@@ -65,16 +51,12 @@ class GNNTrainer:
         self.best_val_loss = float("inf")
         self.history = {"train_loss": [], "val_loss": []}
         
-        # Move static features to device once
         if static_node_features is not None:
             self.static_node_features = static_node_features.to(self.device).contiguous()
         else:
             self.static_node_features = None
 
-    def train_step(
-        self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor
-    ) -> float:
-        """Single optimization step."""
+    def train_step(self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor) -> float:
         self.model.train()
         self.optimizer.zero_grad()
 
@@ -82,15 +64,13 @@ class GNNTrainer:
         y = y.to(self.device)
         mask = mask.to(self.device)
 
-        # Ensure targets and masks only contain series nodes to match model output
-        # (This handles datasets that still include hub nodes)
         N_series = self.model.num_stores * self.model.num_families
         if y.shape[1] > N_series:
             offset = y.shape[1] - N_series
             y = y[:, offset:, :].contiguous()
             mask = mask[:, offset:, :].contiguous()
 
-        # Autocast strategy: CUDA is stable with FP16, MPS is often unstable
+        # Autocast strategy: CUDA only for stability
         device_type = "cuda" if "cuda" in str(self.device) else "cpu"
         use_autocast = device_type == "cuda"
 
@@ -103,18 +83,11 @@ class GNNTrainer:
             return float("nan")
 
         loss.backward()
-
-        # Gradient clipping to prevent NaN on MPS/GPU
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
         self.optimizer.step()
-
         return loss.item()
 
-    def val_step(
-        self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor
-    ) -> float:
-        """Single validation step."""
+    def val_step(self, x_enc: torch.Tensor, y: torch.Tensor, mask: torch.Tensor) -> float:
         self.model.eval()
         device_type = "cuda" if "cuda" in str(self.device) else "cpu"
         use_autocast = device_type == "cuda"
@@ -124,7 +97,6 @@ class GNNTrainer:
             y = y.to(self.device)
             mask = mask.to(self.device)
 
-            # Ensure targets and masks only contain series nodes
             N_series = self.model.num_stores * self.model.num_families
             if y.shape[1] > N_series:
                 offset = y.shape[1] - N_series
@@ -137,12 +109,8 @@ class GNNTrainer:
 
         return loss.item()
 
-    def fit(
-        self, train_loader, val_loader=None, epochs: int = 20
-    ) -> Dict[str, List[float]]:
-        """Standard training loop with Early Stopping."""
+    def fit(self, train_loader, val_loader=None, epochs: int = 20) -> Dict[str, List[float]]:
         self.logger.info(f"Starting training for {epochs} epochs on {self.device}")
-
         early_stop_counter = 0
 
         for epoch in range(epochs):
@@ -151,9 +119,7 @@ class GNNTrainer:
                 x_enc, y, mask = batch
                 loss = self.train_step(x_enc, y, mask)
                 if np.isnan(loss):
-                    self.logger.error(
-                        f"NaN loss detected at epoch {epoch + 1}. Halting."
-                    )
+                    self.logger.error(f"NaN loss detected at epoch {epoch + 1}. Halting.")
                     return self.history
                 train_loss += loss
 
@@ -170,20 +136,14 @@ class GNNTrainer:
                 self.history["val_loss"].append(avg_val_loss)
                 val_info = f" | Val Loss: {avg_val_loss:.6f}"
 
-                # Early Stopping Logic
                 if avg_val_loss < self.best_val_loss:
                     self.best_val_loss = avg_val_loss
-                    self.best_model_state = {
-                        k: v.cpu() for k, v in self.model.state_dict().items()
-                    }
+                    self.best_model_state = {k: v.cpu() for k, v in self.model.state_dict().items()}
                     early_stop_counter = 0
                 else:
                     early_stop_counter += 1
 
-            self.logger.info(
-                f"Epoch {epoch + 1:03d}/{epochs} | Train Loss: {avg_train_loss:.6f}{val_info}"
-            )
-
+            self.logger.info(f"Epoch {epoch + 1:03d}/{epochs} | Train Loss: {avg_train_loss:.6f}{val_info}")
             if early_stop_counter >= self.patience:
                 self.logger.info(f"Early stopping triggered at epoch {epoch + 1}")
                 break
@@ -196,7 +156,6 @@ class GNNTrainer:
         return self.history
 
     def predict(self, loader) -> torch.Tensor:
-        """Generates predictions for the entire loader."""
         self.model.eval()
         all_preds = []
         device_type = "cuda" if "cuda" in str(self.device) else "cpu"

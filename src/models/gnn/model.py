@@ -93,13 +93,17 @@ class FactoredGCN(nn.Module):
         
         self.eps = 1e-3
         self.proj = nn.Conv3d(channels, channels, kernel_size=1)
+        
+        # Pre-register identity matrices for faster adjacency calculation
+        self.register_buffer('eye_s', torch.eye(num_stores))
+        self.register_buffer('eye_f', torch.eye(num_families))
 
     def get_adjs(self) -> List[torch.Tensor]:
         adj_s = F.relu(torch.tanh(torch.matmul(self.e1_s, self.e2_s.t())))
-        adj_s = adj_s + torch.eye(self.S, device=adj_s.device) * self.eps
+        adj_s = adj_s + self.eye_s * self.eps
         
         adj_f = F.relu(torch.tanh(torch.matmul(self.e1_f, self.e2_f.t())))
-        adj_f = adj_f + torch.eye(self.F, device=adj_f.device) * self.eps
+        adj_f = adj_f + self.eye_f * self.eps
         
         adj_s = adj_s / (adj_s.sum(dim=-1, keepdim=True) + 1e-4)
         adj_f = adj_f / (adj_f.sum(dim=-1, keepdim=True) + 1e-4)
