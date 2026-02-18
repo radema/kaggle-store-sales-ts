@@ -77,12 +77,19 @@ class TemporalNeighborLoader:
             
             # SPATIAL SAMPLING
             num_hops = len(self.num_neighbors)
-            n_id, sub_edge_index, mapping, _ = k_hop_subgraph(
-                node_idx=n_slice,
-                num_hops=num_hops,
-                edge_index=self.dataset.static_graph.edge_index,
-                relabel_nodes=True
-            )
+            
+            # OPTIMIZATION: If we are processing all nodes, skip subgraph sampling
+            if len(n_slice) == self.dataset.num_nodes:
+                n_id = torch.arange(self.dataset.num_nodes)
+                sub_edge_index = self.dataset.static_graph.edge_index
+                mapping = n_slice # they are likely the same
+            else:
+                n_id, sub_edge_index, mapping, _ = k_hop_subgraph(
+                    node_idx=n_slice,
+                    num_hops=num_hops,
+                    edge_index=self.dataset.static_graph.edge_index,
+                    relabel_nodes=True
+                )
             
             # ENFORCE TARGET ORDER: Move target nodes to the front
             # mapping[i] is the position of n_slice[i] in n_id

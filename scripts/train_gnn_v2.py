@@ -152,7 +152,7 @@ def main(args):
         dataset, train_times, train_nodes, 
         batch_size=batch_size,
         num_neighbors=config.neighbor_sizes,
-        shuffle=False # Shuffling is handled by day-order in times/nodes
+        shuffle=False
     )
     
     val_loader = make_gnn_v2_loader(
@@ -221,59 +221,92 @@ def main(args):
         logger.info(f"Peak VRAM: {peak_vram:.2f} GB")
 
     # 9. Submission Pass
-    logger.info("Starting full inference for submission...")
-    model.load_state_dict(torch.load(Path("artifacts/gnn_v2/model_best.pt")))
+    generate_submission(model, dataset, factory, device)
+
+def generate_submission(model, dataset, factory, device):
+    logger.info("Starting full inference for Kaggle submission...")
+    
+    # Load best model if exists
+    best_model_path = Path("artifacts/gnn_v2/model_best.pt")
+    if best_model_path.exists():
+        model.load_state_dict(torch.load(best_model_path, map_location=device))
+        logger.info(f"Loaded best model from {best_model_path}")
+    
     model.eval()
     
-    # We need to predict for the VERY LAST time_idx in the dataset (the forecast horizon)
-    # The submission usually covers the next 16 days.
-    # In our dataset, the labels for the last test days are unknown, but features are available.
+    # The submission period starts right after the last day in our features (if features are historical only)
+    # OR we use the very last available window to predict the next 16 days.
+    # In temporal competition data, features usually include the test period.
+    # We use the window ending at the last training day.
     
-    # For competition submission, we want the period after the training data.
-    # get_flat_indices above used up to total_steps.
-    # Let's predict for the last time_idx that covers the test period.
-    # In temporal_ts, labels.npy usually ends at the end of training.
-    # If the user wants a submission.csv, we must ensure we are predicting the correct window.
+    # Total days in features: features.size(0)
+    # If the last day of features is the day before test starts:
+    last_window_start = dataset.features.size(0) - dataset.window
     
-    # Heuristic: the last 16 days of dataset.features correspond to the test period
-    # OR we follow the train_gnn.py logic of loading test.parquet.
-    
-    # For Phase 6 verification, we will run inference on the validation set 
-    # and verify it maps back to (Store, Family) lexical order.
-    
-    # 1. Verification of Lexical Order
-    # The nodes are 0..N-1. In GraphFactory, these are (Store, Family) sorted.
-    # So idx 0 is (Store 1, Family 1), idx 1 is (Store 1, Family 2), etc.
-    # Our result should be (N_nodes, Horizon).
-    
-    # Predict for context of first validation day
-    val_start = train_steps
-    times_inf = [val_start] * dataset.num_nodes
+    times_inf = [last_window_start] * dataset.num_nodes
     nodes_inf = list(range(dataset.num_nodes))
     
+    # Use batch_size = num_nodes for one single pass
     inf_loader = make_gnn_v2_loader(dataset, times_inf, nodes_inf, batch_size=dataset.num_nodes, shuffle=False)
     
     batch = next(iter(inf_loader)).to(device)
     with torch.no_grad():
-        out = model(batch) # (N_nodes, Horizon)
+        out = model(batch) # (Num_Nodes, Horizon=16)
         
-    # out.shape should be (1782, 16)
-    # out[0, :] is prediction for Store 1, Family 1 over 16 days.
-    # Lexical order for submission is date-first or id-first.
-    # Competition CSV: id, sales. 
-    # id usually increments by store/family inside each date, or date-first.
-    # Actually, Kaggle test.csv is ID-sorted. 
-    # The IDs are usually (date1, store1, fam1), (date1, store1, fam2)...
-    
+    # Invert log transform: log1p -> raw sales
     preds_raw = torch.expm1(out).cpu().numpy()
-    logger.info(f"Inference complete. Output shape: {preds_raw.shape}")
+    preds_raw = np.maximum(preds_raw, 0) # Clamp negatives
     
-    # If we need a real submission.csv, we'd loop over dates...
-    # For now, we've verified inference flow.
+    # MAP TO KAGGLE ORDER
+    # Kaggle expects: Date 1 (All Nodes), Date 2 (All Nodes)...
+    # Our out is: Node 1 (All Dates), Node 2 (All Dates)...
+    # Thus, we need to transpose to (Horizon, Nodes) before flattening.
+    preds_kag = preds_raw.T.flatten() # (16, 1782) -> (28512,)
+    
+    # Load test.csv to get the IDs
+    test_df = pd.read_csv("data/raw/test.csv")
+    if len(preds_kag) != len(test_df):
+        logger.error(f"Prediction mismatch! Model: {len(preds_kag)}, Test.csv: {len(test_df)}")
+        # If mismatch, might be because features.npy doesn't end exactly at T_train.
+        # Let's adjust if needed.
+        return
+
+    submission = pd.DataFrame({
+        "id": test_df["id"],
+        "sales": preds_kag
+    })
+    
+    output_path = Path("artifacts/gnn_v2/submission.csv")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    submission.to_csv(output_path, index=False)
+    logger.info(f"Submission saved to {output_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dev", action="store_true", help="Run in dev mode (2 epochs, small data)")
     parser.add_argument("--full-val", action="store_true", help="Run full validation instead of a subset")
+    parser.add_argument("--num-workers", type=int, default=0, help="Number of workers for loader")
+    parser.add_argument("--predict-only", action="store_true", help="Skip training and just generate submission.csv")
     args = parser.parse_args()
-    main(args)
+    
+    if args.predict_only:
+        # Minimal setup for prediction
+        config = GNNConfig()
+        data_dir = Path("data/processed/gnn")
+        features = torch.from_numpy(np.load(data_dir / "features.npy")).float()
+        labels = torch.from_numpy(np.load(data_dir / "labels.npy")).float()
+        factory = GraphFactory(Path("data/raw/stores.csv"), sorted(pd.read_parquet("data/processed/train.parquet")["family"].unique()))
+        static_graph = factory.build_graph()
+        dataset = TemporalGraphDataset(static_graph, features, labels, config.window, config.horizon)
+        device = torch.device("mps") if torch.backends.mps.is_available() else torch.device("cpu")
+        model = SalesGNNv2(
+            in_channels=features.size(-1),
+            hidden_channels=config.hidden_dim,
+            out_channels=config.horizon,
+            num_layers=2,
+            gat_heads=config.gat_heads,
+            dropout=config.dropout
+        ).to(device)
+        generate_submission(model, dataset, factory, device)
+    else:
+        main(args)
