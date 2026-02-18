@@ -13,11 +13,13 @@ class GNNConfig:
     # Sampling & Batching
     neighbor_sizes: List[int] = field(default_factory=lambda: [10, 10])
     batch_size_nodes: int = 1024
+    window: int = 30
+    horizon: int = 16
     
     # Training Defaults
     learning_rate: float = 0.001
-    epochs: int = 100
-    early_stopping_patience: int = 10
+    epochs: int = 5
+    early_stopping_patience: int = 2
     
     def __post_init__(self):
         # Validation or derived parameters can go here
