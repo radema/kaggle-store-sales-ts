@@ -1,22 +1,24 @@
 model:
-  hidden_dim: 32
+  hidden_dim: 64
   heads: 1
   alpha: 0.01 # L1 sparsity weight
   window: 30
   horizon: 16
-  num_layers: 4
-  embedding_dim: 16
+  num_layers: 5
+  embedding_dim: 32
 
 training:
   epochs: 200
-  batch_size: 16
+  batch_size: 8
   lr: 0.001
-  patience: 10
+  patience: 5
   val_days: 16 # Use last horizon days for validation
 
 data:
-  train_start: "2016-01-01" # Much faster and more relevant
+  train_start: "2017-01-01" # Much faster and more relevant
   features:
+    - "log1p_sales"
+    - "transactions"
     - "onpromotion"
     - "dcoilwtico"
     - "is_nat_holiday"
@@ -26,3 +28,9 @@ data:
     - "cos_day_year"
     - "dayofweek"
     - "is_wage_day"
+    - "lag_7"
+    - "lag_14"
+    - "lag_21"
+    - "lag_28"
+    - "rolling_30_sales"
+    - "is_closed"
