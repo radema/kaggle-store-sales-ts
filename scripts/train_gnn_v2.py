@@ -258,22 +258,39 @@ def generate_submission(model, dataset, factory, device):
     preds_raw = np.maximum(preds_raw, 0) # Clamp negatives
     
     # MAP TO KAGGLE ORDER
-    # Kaggle expects: Date 1 (All Nodes), Date 2 (All Nodes)...
-    # Our out is: Node 1 (All Dates), Node 2 (All Dates)...
-    # Thus, we need to transpose to (Horizon, Nodes) before flattening.
-    preds_kag = preds_raw.T.flatten() # (16, 1782) -> (28512,)
+    # Kaggle test.csv ID sequence does NOT follow numeric store order (1, 2, 3...)
+    # It follows string-sort order (1, 10, 11... 2, 21...) or simply the sequence in the file.
+    # We must map (store_nbr, family) -> prediction horizon.
     
-    # Load test.csv to get the IDs
+    # 1. Build a lookup: (store, family) -> 16-day prediction array
+    # Our model output 'out' uses the numeric order from factory.node_metadata
+    lookup = {}
+    for i in range(dataset.num_nodes):
+        meta = factory.node_metadata[i]
+        key = (meta['store_nbr'], meta['family'])
+        lookup[key] = preds_raw[i] # array of 16 values
+        
+    # 2. Extract predictions matching test.csv one day at a time
     test_df = pd.read_csv("data/raw/test.csv")
-    if len(preds_kag) != len(test_df):
-        logger.error(f"Prediction mismatch! Model: {len(preds_kag)}, Test.csv: {len(test_df)}")
-        # If mismatch, might be because features.npy doesn't end exactly at T_train.
-        # Let's adjust if needed.
+    test_df['date'] = pd.to_datetime(test_df['date'])
+    unique_dates = sorted(test_df['date'].unique())
+    
+    all_preds = []
+    for d_idx, date in enumerate(unique_dates):
+        day_df = test_df[test_df['date'] == date]
+        for _, row in day_df.iterrows():
+            key = (row['store_nbr'], row['family'])
+            # d_idx is the offset in the horizon [0..15]
+            val = lookup[key][d_idx]
+            all_preds.append(val)
+            
+    if len(all_preds) != len(test_df):
+        logger.error(f"Prediction mismatch! Model: {len(all_preds)}, Test.csv: {len(test_df)}")
         return
 
     submission = pd.DataFrame({
         "id": test_df["id"],
-        "sales": preds_kag
+        "sales": all_preds
     })
     
     output_path = Path("artifacts/gnn_v2/submission.csv")
