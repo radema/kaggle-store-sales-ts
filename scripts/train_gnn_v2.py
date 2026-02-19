@@ -21,14 +21,26 @@ logger = get_logger("train_gnn_v2")
 
 # Removed create_temporal_tensors to save memory - windowing is handled by dataset/loader.
 
-def train_one_epoch(model, loader, optimizer, criterion, device, grad_clip=1.0):
+def train_one_epoch(model, loader, optimizer, criterion, device, steps_per_epoch=None, grad_clip=1.0):
     model.train()
     total_loss = 0
     count = 0
     start_time = time.time()
     
-    pbar = tqdm(loader, desc="Training", leave=False)
-    for batch in pbar:
+    train_iter = iter(loader)
+    steps_to_run = steps_per_epoch if steps_per_epoch is not None else len(loader)
+    
+    pbar = tqdm(range(steps_to_run), desc="Training", leave=False)
+    for _ in pbar:
+        try:
+            batch = next(train_iter)
+        except StopIteration:
+            if steps_per_epoch is None:
+                break
+            else:
+                train_iter = iter(loader)
+                batch = next(train_iter)
+                
         batch = batch.to(device)
         optimizer.zero_grad()
         out = model(batch)
@@ -186,7 +198,7 @@ def main(args):
     peak_vram = 0
     
     for epoch in range(config.epochs):
-        train_loss, duration = train_one_epoch(model, train_loader, optimizer, criterion, device)
+        train_loss, duration = train_one_epoch(model, train_loader, optimizer, criterion, device, steps_per_epoch=args.steps_per_epoch)
         total_train_time += duration
         total_nodes_processed += len(train_times) # Total index pairs
         
@@ -304,6 +316,7 @@ if __name__ == "__main__":
     parser.add_argument("--full-val", action="store_true", help="Run full validation instead of a subset")
     parser.add_argument("--num-workers", type=int, default=0, help="Number of workers for loader")
     parser.add_argument("--predict-only", action="store_true", help="Skip training and just generate submission.csv")
+    parser.add_argument('--steps-per-epoch', type=int, default=None, help='Number of training batches per epoch. If None, exhaust full dataset.')
     args = parser.parse_args()
     
     if args.predict_only:
