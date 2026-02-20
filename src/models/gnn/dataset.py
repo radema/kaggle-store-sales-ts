@@ -1,18 +1,34 @@
 import torch
 import numpy as np
+import pandas as pd
 from pathlib import Path
 from torch.utils.data import Dataset
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict
 from sklearn.preprocessing import StandardScaler, LabelEncoder
 
 class SalesGNNDataset(Dataset):
     """
-    Spatio-Temporal Dataset for GNN.
-    Slices history and future windows across all nodes simultaneously.
-    """
+    Dataset for Spatio-Temporal Graph Neural Network.
+    
+    Optimized Implementation:
+    Pre-converts the flat Pandas DataFrame into a structured 3D Tensor 
+    of shape (Time, Nodes, Features) during initialization. This eliminates 
+    costly Pandas filtering/indexing during the training loop.
 
+    Attributes:
+        X (torch.Tensor): Input features tensor (Time, Nodes, Features).
+        Y (torch.Tensor): Target tensor (Time, Nodes, Output_Features).
+        valid_indices (range): Valid start time indices for samples.
+    """
     def __init__(self, features, labels, is_open, window, horizon):
-        # Ensure we have tensors
+        """
+        Args:
+            features (np.ndarray or torch.Tensor): (Time, Nodes, Features)
+            labels (np.ndarray or torch.Tensor): (Time, Nodes) or (Time, Nodes, 1)
+            is_open (np.ndarray or torch.Tensor): (Time, Nodes)
+            window (int): Lookback window size
+            horizon (int): Prediction horizon size
+        """
         if isinstance(features, np.ndarray):
             self.features = torch.from_numpy(features).float()
         else:
@@ -22,6 +38,9 @@ class SalesGNNDataset(Dataset):
             self.labels = torch.from_numpy(labels).float()
         else:
             self.labels = labels.float()
+            
+        if self.labels.dim() == 2:
+            self.labels = self.labels.unsqueeze(-1)
 
         if isinstance(is_open, np.ndarray):
             self.is_open = torch.from_numpy(is_open).float()
@@ -34,28 +53,35 @@ class SalesGNNDataset(Dataset):
         self.static_node_features = None
 
         self.num_time_steps = self.features.shape[0]
+        # Valid starting indices for a sample
+        # A sample starts at index i, lookback is [i, i+window), target is [i+window, i+window+horizon)
         self.num_samples = self.num_time_steps - window - horizon + 1
 
         if self.num_samples <= 0:
             raise ValueError(
-                f"Insufficient time steps ({self.num_time_steps}) for window {window} and horizon {horizon}. "
-                f"Need at least {window + horizon} steps, got {self.num_time_steps}."
+                f"Insufficient time steps ({self.num_time_steps}) for window {window} and horizon {horizon}."
             )
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Returns:
+            x_enc: (Nodes, Window, Features)
+            y: (Nodes, Horizon)
+            mask: (Nodes, Horizon)
+        """
         enc_end = idx + self.window
         dec_end = enc_end + self.horizon
 
         # History (Encoder): (Window, Nodes, Features) -> (Nodes, Window, Features)
         x_enc = self.features[idx:enc_end, :, :].transpose(0, 1)
 
-        # Target: (Horizon, Nodes) -> (Nodes, Horizon)
-        y = self.labels[enc_end:dec_end, :].transpose(0, 1)
+        # Target: (Horizon, Nodes, 1) -> (Nodes, Horizon)
+        y = self.labels[enc_end:dec_end, :, 0].transpose(0, 1)
 
-        # Hard Gating Mask: (Horizon, Nodes) -> (Nodes, Horizon)
+        # Gating Mask: (Horizon, Nodes) -> (Nodes, Horizon)
         mask = self.is_open[enc_end:dec_end, :].transpose(0, 1)
 
         return x_enc, y, mask

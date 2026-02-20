@@ -47,15 +47,25 @@ def main(config_path, dev_mode=False):
     horizon = config["model"]["horizon"]
     val_days = config["training"]["val_days"]
     feature_cols = config["data"]["features"]
+    logger.info(f"Feature columns ({len(feature_cols)}): {feature_cols}")
 
     cache_dir = data_dir / "gnn"
+    cache_valid = False
+    
     if cache_dir.exists() and (cache_dir / "features.npy").exists():
-        logger.info(f"Loading GNN Dataset from cache: {cache_dir}")
-        full_dataset = SalesGNNDataset.load_from_cache(
-            cache_dir, window, horizon, mmap=True
-        )
-    else:
-        logger.info("Cache not found. Building GNN Dataset from related scripts (Slow)...")
+        # Quick check for feature dimensionality
+        cached_features_shape = np.load(cache_dir / "features.npy", mmap_mode="r").shape
+        if len(cached_features_shape) == 3 and cached_features_shape[2] == len(feature_cols):
+            logger.info(f"Loading GNN Dataset from cache: {cache_dir}")
+            full_dataset = SalesGNNDataset.load_from_cache(
+                cache_dir, window, horizon, mmap=True
+            )
+            cache_valid = True
+        else:
+            logger.warning(f"Cache feature mismatch: expected {len(feature_cols)}, found {cached_features_shape[2]}. Rebuilding...")
+
+    if not cache_valid:
+        logger.info("Cache not found or invalid. Building GNN Dataset from related scripts (Slow)...")
         full_dataset = SalesGNNDataset.from_df(
             df=train_df,
             stores_df=stores_df,

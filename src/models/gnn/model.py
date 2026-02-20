@@ -42,7 +42,7 @@ class TemporalBlock(nn.Module):
         # Fold: (B*S*F, C, T)
         x = x.view(B * S * F, C, T)
         
-        out = torch.tanh(self.filter_conv(x)) * torch.sigmoid(self.gate_conv(x))
+        out = torch.relu(self.filter_conv(x)) * torch.sigmoid(self.gate_conv(x))
         
         # Unfold back to (B, C, S, F, T)
         return out.view(B, -1, S, F, T)
