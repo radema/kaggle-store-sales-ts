@@ -129,6 +129,9 @@ def process_holidays(logger, df, holidays_df):
     df["is_christmas_eve"] = (
         (df["date"].dt.month == 12) & (df["date"].dt.day == 24)
     ).astype(int)
+    df["is_valentines_day"] = (
+        (df["date"].dt.month == 2) & (df["date"].dt.day == 14)
+    ).astype(int)
     df["is_mothers_day"] = (
         (df["date"].dt.month == 5)
         & (df["date"].dt.dayofweek == 6)
@@ -147,6 +150,7 @@ def process_holidays(logger, df, holidays_df):
     # Fill NAs with 0
     new_holiday_cols = [
         "is_christmas_eve",
+        "is_valentines_day",
         "is_mothers_day",
         "is_earthquake_period",
         "is_black_friday",
@@ -178,6 +182,23 @@ def process_domain_features(logger, df):
     df["is_wage_day"] = ((df["day"] == 15) | (df["date"].dt.is_month_end)).astype(
         np.int8
     )
+    df["is_wage_day_weekend"] = (df["is_wage_day"] & df["is_weekend"]).astype(np.int8)
+
+    # 2b. Region-based seasonality (Back to School)
+    coast_provinces = [
+        "Guayas",
+        "Manabi",
+        "Esmeraldas",
+        "Los Rios",
+        "El Oro",
+        "Santa Elena",
+    ]
+    is_coast = df["state"].isin(coast_provinces)
+    month = df["date"].dt.month
+    df["is_back_to_school"] = (
+        (is_coast & month.isin([4, 5])) | (~is_coast & month.isin([8, 9]))
+    ).astype(np.int8)
+
     df["is_year_start"] = (df["date"].dt.is_year_start).astype(np.int8)
     df["is_year_end"] = (df["date"].dt.is_year_end).astype(np.int8)
 
@@ -263,6 +284,15 @@ def process_domain_features(logger, df):
         # Clean up the intermediate proxy column (except cluster which is used in lags)
         if level != "cluster":
             df = df.drop(columns=[proxy_name])
+
+    # 5b. Exact Annual Lag with cluster fallback (Coalesce)
+    logger.info("Computing lag_364_sales (exact with cluster fallback)...")
+    df["lag_364_sales"] = (
+        df.groupby(["store_nbr", "family"])["log1p_sales"]
+        .shift(364)
+        .fillna(df["lag_364_cluster_sales"])
+        .fillna(0)
+    )
 
     # 6. Robust Lags [7, 14, 21, 28]
     lags = [7, 14, 21, 28]

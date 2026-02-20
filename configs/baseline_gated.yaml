@@ -7,6 +7,7 @@ model:
     trend: 
       - "rolling_30_sales"
       - "year"
+      - "lag_364_sales"
     residual:
       - "family"
       - "onpromotion"
@@ -14,7 +15,6 @@ model:
       - "state"
       - "type"
       - "cluster"
-      - "dcoilwtico"
       - "is_nat_holiday"
       - "is_reg_holiday"
       - "is_loc_holiday"
@@ -24,25 +24,29 @@ model:
       - "lag_28"
       - "is_weekend"
       - "is_wage_day"
+      - "is_wage_day_weekend"
       - "sin_day_year"
       - "cos_day_year"
       - "rolling_30_cluster_sales"
-      - "lag_364_cluster_sales"
       - "rolling_30_city_sales"
-      - "lag_364_city_sales"
       - "rolling_30_type_sales"
-      - "lag_364_type_sales"
       - "sin_day_month"
       - "cos_day_month"
       - "sin_day_week"
       - "cos_day_week"
       - "is_christmas_eve"
+      - "is_valentines_day"
       - "is_mothers_day"
       - "is_black_friday"
       - "is_earthquake_period"
+      - "is_back_to_school"
+      - "dcoilwtico"
+      - "lag_364_cluster_sales"
+      - "lag_364_city_sales"
+      - "lag_364_type_sales"
 
 validation:
-  n_folds: 5
+  n_folds: 10
   train_days: 730 # 2 years
   val_days: 16 # Competitive window
   target_col: "log1p_sales" # Note: we train directly on the pre-scaled log target

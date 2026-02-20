@@ -19,7 +19,22 @@ class IterativeGatedRunner:
         with open(config_path, "r") as f:
             self.config = yaml.safe_load(f)
         self.logger = logger
+        self.output_dir = Path("artifacts/baseline")
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         self.data_dir = Path("data/processed")
+
+    def _log_feature_importance(self, model, features, title="Residual Model"):
+        """Logs the top 20 features by importance."""
+        if not hasattr(model, "feature_importances_"):
+            return
+
+        importances = pd.DataFrame(
+            {"feature": features, "importance": model.feature_importances_}
+        ).sort_values("importance", ascending=False)
+
+        self.logger.info(f"{title} Feature Importance (Top 20):")
+        for i, row in importances.head(20).iterrows():
+            self.logger.info(f"  {row['feature']:25}: {row['importance']:>8.0f}")
         self.output_dir = Path("artifacts/baseline")
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -140,22 +155,33 @@ class IterativeGatedRunner:
         unique_dates = sorted(dates)
 
         for i, curr_date in enumerate(unique_dates):
+            # 1. First, update features for curr_date
+            if i > 0:
+                self.update_features_iterative(
+                    context_df, unique_dates[i - 1], curr_date
+                )
+            else:
+                # For the very first day, use the last available date in context
+                last_date = context_df[context_df["date"] < curr_date]["date"].max()
+                # Overwrite test set placeholder features (like is_closed) computed from NaN values
+                self.update_features_iterative(context_df, last_date, curr_date)
+
+            # 2. Extract context for current step
             mask = context_df["date"] == curr_date
             X_step = context_df[mask]
 
-            # Predict components
+            if len(X_step) == 0:
+                continue
+
+            # 3. Predict components
             comp = model.predict_components(X_step)
             y_pred_step = comp["total"]
 
+            # 4. Store predictions to be used by subsequent lags/rolling
             context_df.loc[mask, "log1p_sales"] = y_pred_step
             preds.append(y_pred_step)
             trend_preds.append(comp["trend"])
             resid_preds.append(comp["residual"])
-
-            # Update next date's features
-            if i < len(unique_dates) - 1:
-                next_date = unique_dates[i + 1]
-                self.update_features_iterative(context_df, curr_date, next_date)
 
         return {
             "total": np.concatenate(preds),
@@ -212,6 +238,13 @@ class IterativeGatedRunner:
                 model_conf["features"]["trend"], model.trend_estimator_.coef_
             ):
                 self.logger.info(f"  {feat:20}: {coef:.4f}")
+
+            # Log Residual Feature Importance
+            self._log_feature_importance(
+                model.residual_estimator_,
+                model_conf["features"]["residual"],
+                title=f"Fold {fold + 1} Residual",
+            )
 
             # Validation Window
             val_dates = sorted(val_fold["date"].unique())
@@ -280,6 +313,13 @@ class IterativeGatedRunner:
             model_conf["features"]["trend"], model.trend_estimator_.coef_
         ):
             self.logger.info(f"  {feat:20}: {coef:.4f}")
+
+        # Log Final Residual Feature Importance
+        self._log_feature_importance(
+            model.residual_estimator_,
+            model_conf["features"]["residual"],
+            title="Final Residual",
+        )
 
         # Inference context
         full_df = (
