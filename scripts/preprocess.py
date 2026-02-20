@@ -157,6 +157,20 @@ def process_domain_features(logger, df):
     df["sin_day_year"] = np.sin(2 * np.pi * day_of_year / 365.25).astype(np.float32)
     df["cos_day_year"] = np.cos(2 * np.pi * day_of_year / 365.25).astype(np.float32)
 
+    # Cyclic seasonality for week and month
+    day_of_month = df["date"].dt.day
+    days_in_month = df["date"].dt.days_in_month
+
+    df["sin_day_month"] = np.sin(2 * np.pi * day_of_month / days_in_month).astype(
+        np.float32
+    )
+    df["cos_day_month"] = np.cos(2 * np.pi * day_of_month / days_in_month).astype(
+        np.float32
+    )
+
+    df["sin_day_week"] = np.sin(2 * np.pi * df["dayofweek"] / 7.0).astype(np.float32)
+    df["cos_day_week"] = np.cos(2 * np.pi * df["dayofweek"] / 7.0).astype(np.float32)
+
     # 3. Rolling 30-day Mean (excluding current row via shift)
     # We sort by date to ensure rolling works correctly
     df = df.sort_values(["store_nbr", "family", "date"])
@@ -167,21 +181,59 @@ def process_domain_features(logger, df):
         .fillna(0)
     )
 
-    # 4. is_closed Flag (Redefined by rolling average)
-    # 1 if rolling average is 0 (inactive or not yet opened), 0 otherwise
-    df["is_closed"] = (df["rolling_30_sales"] == 0).astype(np.int8)
+    # 4. is_closed Flag
+    # Re-define to capture true store closure
+    # Jan 1st is structurally closed (excluding specific exceptions if we know them, but generally 0)
+    # Also closed if the store had 0 transactions AND 0 sales on that date.
+    # Note: transactions are already merged and NA filled with 0.
+
+    # Store-level daily sum of sales
+    store_daily_sales = df.groupby(["store_nbr", "date"])["sales"].transform("sum")
+
+    df["is_closed"] = (
+        ((df["date"].dt.month == 1) & (df["date"].dt.day == 1))
+        | ((store_daily_sales == 0) & (df["transactions"] == 0))
+    ).astype(np.int8)
+
     logger.info(
-        f"Redefined is_closed via rolling average. {df['is_closed'].sum()} rows marked as closed."
+        f"Redefined is_closed explicitly. {df['is_closed'].sum()} rows marked as closed."
     )
 
-    # 5. Cluster Proxy (Average sales for family in cluster on specific date)
-    cluster_proxy = (
-        df.groupby(["date", "cluster", "family"])["log1p_sales"]
-        .mean()
-        .reset_index()
-        .rename(columns={"log1p_sales": "cluster_sales_proxy"})
-    )
-    df = df.merge(cluster_proxy, on=["date", "cluster", "family"], how="left")
+    # 5. Target Encodings (Rolling 30-day Mean & 1-Year Lag)
+    levels = ["cluster", "city", "type"]
+    for level in levels:
+        logger.info(f"Computing target encodings for {level}...")
+
+        # 30-day Rolling Average
+        proxy_name = f"{level}_sales_proxy"
+        # We use existing cluster_sales_proxy name for compatibility with lag section
+        if level == "cluster":
+            proxy_name = "cluster_sales_proxy"
+
+        level_proxy = (
+            df.groupby(["date", level, "family"])["log1p_sales"]
+            .mean()
+            .reset_index()
+            .rename(columns={"log1p_sales": proxy_name})
+        )
+        # Shift to avoid leakage! Merge back and then shift per group
+        df = df.merge(level_proxy, on=["date", level, "family"], how="left")
+
+        # We need the 30-day rolling mean of this proxy, shifted by 1 day
+        df[f"rolling_30_{level}_sales"] = (
+            df.groupby(["store_nbr", "family"])[proxy_name]
+            .transform(lambda x: x.shift(1).rolling(window=30, min_periods=1).mean())
+            .fillna(0)
+        )
+
+        # 1-Year (364 days) Lag of the proxy to capture strong annual seasonality
+        df[f"lag_364_{level}_sales"] = (
+            df.groupby(["store_nbr", "family"])[proxy_name].shift(364).fillna(0)
+        )
+
+        # Clean up the intermediate proxy column (except cluster which is used in lags)
+        if level != "cluster":
+            df = df.drop(columns=[proxy_name])
 
     # 6. Robust Lags [7, 14, 21, 28]
     lags = [7, 14, 21, 28]
