@@ -35,8 +35,6 @@ class IterativeGatedRunner:
         self.logger.info(f"{title} Feature Importance (Top 20):")
         for i, row in importances.head(20).iterrows():
             self.logger.info(f"  {row['feature']:25}: {row['importance']:>8.0f}")
-        self.output_dir = Path("artifacts/baseline")
-        self.output_dir.mkdir(parents=True, exist_ok=True)
 
     def load_data(self):
         self.logger.info("Loading processed data...")
