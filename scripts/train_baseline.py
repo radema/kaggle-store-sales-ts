@@ -104,6 +104,28 @@ class IterativeGatedRunner:
             next_mask, "rolling_30_sales"
         ].fillna(0)
 
+        # 2b. Update Rolling 30 for Target Encodings (cluster, city, type)
+        # These are simple averages of the sales within the grouped attributes over 30 days
+        rolling_scope = df[(df["date"] >= roll_start) & (df["date"] <= roll_end)]
+
+        levels = ["cluster", "city", "type"]
+        for level in levels:
+            col_name = f"rolling_30_{level}_sales"
+            if col_name in df.columns:
+                # Average by level and family
+                level_roll = rolling_scope.groupby([level, "family"])[
+                    "log1p_sales"
+                ].mean()
+
+                # Map back using the next_mask store attributes
+                df.loc[next_mask, col_name] = (
+                    df.loc[next_mask]
+                    .set_index([level, "family"])
+                    .index.map(level_roll)
+                    .values
+                )
+                df.loc[next_mask, col_name] = df.loc[next_mask, col_name].fillna(0)
+
         # 3. Update is_closed (Heuristic: Closed if rolling avg is 0 and NO ongoing promotion)
         # This allows a "warm-up" period where a closed store can reopen if promoted.
         df.loc[next_mask, "is_closed"] = (

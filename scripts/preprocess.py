@@ -125,8 +125,37 @@ def process_holidays(logger, df, holidays_df):
         loc[["date", "city", "is_loc_holiday"]], on=["date", "city"], how="left"
     )
 
+    # Specific Holiday Heuristics
+    df["is_christmas_eve"] = (
+        (df["date"].dt.month == 12) & (df["date"].dt.day == 24)
+    ).astype(int)
+    df["is_mothers_day"] = (
+        (df["date"].dt.month == 5)
+        & (df["date"].dt.dayofweek == 6)
+        & (df["date"].dt.day >= 8)
+        & (df["date"].dt.day <= 14)
+    ).astype(int)
+    df["is_earthquake_period"] = (
+        (df["date"] >= "2016-04-16") & (df["date"] <= "2016-05-14")
+    ).astype(int)
+    df["is_black_friday"] = (
+        (df["date"].dt.month == 11)
+        & (df["date"].dt.dayofweek == 4)
+        & (df["date"].dt.day >= 24)
+    ).astype(int)
+
     # Fill NAs with 0
-    holiday_cols = ["is_nat_holiday", "is_reg_holiday", "is_loc_holiday"]
+    new_holiday_cols = [
+        "is_christmas_eve",
+        "is_mothers_day",
+        "is_earthquake_period",
+        "is_black_friday",
+    ]
+    holiday_cols = [
+        "is_nat_holiday",
+        "is_reg_holiday",
+        "is_loc_holiday",
+    ] + new_holiday_cols
     df[holiday_cols] = df[holiday_cols].fillna(0).astype(int)
 
     logger.info(f"Merged holidays. Row count: {row_count_before} -> {len(df)}")

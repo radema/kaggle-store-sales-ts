@@ -26,6 +26,20 @@ model:
       - "is_wage_day"
       - "sin_day_year"
       - "cos_day_year"
+      - "rolling_30_cluster_sales"
+      - "lag_364_cluster_sales"
+      - "rolling_30_city_sales"
+      - "lag_364_city_sales"
+      - "rolling_30_type_sales"
+      - "lag_364_type_sales"
+      - "sin_day_month"
+      - "cos_day_month"
+      - "sin_day_week"
+      - "cos_day_week"
+      - "is_christmas_eve"
+      - "is_mothers_day"
+      - "is_black_friday"
+      - "is_earthquake_period"
 
 validation:
   n_folds: 5
