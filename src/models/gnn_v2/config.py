@@ -6,20 +6,20 @@ class GNNConfig:
     """Configuration for GNN v2.0 (PyTorch Geometric + GATv2)."""
     
     # Architecture
-    hidden_dim: int = 64
-    gat_heads: int = 4
-    dropout: float = 0.1
+    hidden_dim: int = 128
+    gat_heads: int = 8
+    dropout: float = 0.2
     
     # Sampling & Batching
-    neighbor_sizes: List[int] = field(default_factory=lambda: [10, 10])
+    neighbor_sizes: List[int] = field(default_factory=lambda: [15, 10])
     batch_size_nodes: int = 1024
-    window: int = 30
+    window: int = 90
     horizon: int = 16
     
     # Training Defaults
     learning_rate: float = 0.001
-    epochs: int = 5
-    early_stopping_patience: int = 2
+    epochs: int = 15
+    early_stopping_patience: int = 4
     
     def __post_init__(self):
         # Validation or derived parameters can go here
