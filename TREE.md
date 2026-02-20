@@ -9,7 +9,8 @@
 ├── .bolts/                  # Task-specific documentation (Specs, ADRs, MRPs)
 │   ├── baseline-rearchitecture/ # Bolt #9: Gated Hybrid Baseline
 │   ├── gnn-design/              # Bolt #10: ST-GNN Implementation
-│   └── gnn-optimization/        # Bolt #11: Performance Speedup
+│   ├── gnn-optimization/        # Bolt #11: Performance Speedup
+│   └── gnn-v2.0-new-basegraph/  # Bolt #12: GNN v2.0 Refactor
 ├── artifacts/               # Model outputs, metrics, and submissions (GitIgnored)
 │   └── baseline/            # Current baseline OOFs and Submissions
 ├── configs/                 # YAML pipeline definitions
@@ -28,10 +29,11 @@
 ├── src/
 │   ├── models/              # Model Architectures
 │   │   ├── hybrid.py        # HybridRegressor (Trend + Residuals)
-│   │   └── gnn/             # Spatio-Temporal Graph Neural Network
-│   │       ├── dataset.py   # Seq2Seq sliding window tensors
-│   │       ├── features.py  # is_open & Calendar engineering
-│   │       └── graph.py     # Hierarchical & Spatial adjacency
+│   │   ├── gnn/             # Spatio-Temporal Graph Neural Network
+│   │   └── gnn_v2/          # GNN v2.0 (PyG based)
+│   │       ├── config.py    # Hyperparameters
+│   │       ├── graph.py     # GraphFactory for (Store, Family) nodes
+│   │       └── loader.py    # TemporalNeighborLoader with k-hop fallback
 │   ├── utils/               # Shared utilities
 │   │   └── logging.py       # Standardized session logging
 │   └── validation/          # Validation Framework
@@ -39,6 +41,8 @@
 │       ├── metrics.py       # RMSLE and custom errors
 │       └── splitters.py     # TimeSeries Splitters
 ├── tests/                   # Test suite (pytest)
+│   └── models/
+│       └── gnn_v2/          # Tests for GNN v2.0
 └── TREE.md                  # This file
 ```
 
