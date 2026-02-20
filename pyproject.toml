@@ -5,10 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ipykernel>=7.2.0",
     "kaggle>=1.8.4",
     "lightgbm>=4.6.0",
     "matplotlib",
     "nbformat>=5.10.4",
+    "notebook>=7.5.3",
     "numpy",
     "pandas",
     "plotly>=6.5.2",
