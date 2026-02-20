@@ -1,7 +1,6 @@
 import pandas as pd
 import numpy as np
 import yaml
-import sys
 from pathlib import Path
 from sklearn.linear_model import Ridge
 from lightgbm import LGBMRegressor
@@ -306,12 +305,19 @@ class IterativeGatedRunner:
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        path = "configs/baseline_gated.yaml"
-    else:
-        path = sys.argv[1]
+    import argparse
 
-    runner = IterativeGatedRunner(path)
+    parser = argparse.ArgumentParser(description="Baseline Gated Model Trainer")
+    parser.add_argument(
+        "--config",
+        type=str,
+        default="configs/baseline_gated.yaml",
+        help="Path to the configuration file",
+    )
+    # Allows it to gracefully ignore other unknown flags like --smoke-test
+    args, _ = parser.parse_known_args()
+
+    runner = IterativeGatedRunner(args.config)
     runner.load_data()
     runner.run_cv()
     runner.produce_submission()
